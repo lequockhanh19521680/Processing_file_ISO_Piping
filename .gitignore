@@ -54,8 +54,11 @@ tmp/
 *.json
 !package.json
 !package-lock.json
+!tsconfig.json
 service-account.json
 
 # Uploaded/processed files
 uploads/
 output/
+*.xlsx
+!examples/*.xlsx
