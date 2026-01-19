@@ -26,9 +26,11 @@ app = FastAPI(
 )
 
 # Configure CORS to allow frontend access
+# WARNING: In production, replace "*" with your specific frontend URL(s)
+# Example: allow_origins=["https://your-frontend-domain.com"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact frontend URL
+    allow_origins=["*"],  # TODO: Restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

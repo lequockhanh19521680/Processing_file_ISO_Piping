@@ -131,7 +131,9 @@ class DriveService:
             return pdf_files
             
         except Exception as e:
-            print(f"Error listing files in folder {folder_id}: {str(e)}")
+            # Log error and return partial results rather than failing completely
+            import logging
+            logging.error(f"Error listing files in folder {folder_id}: {str(e)}")
             return pdf_files
     
     def download_file(self, file_id: str) -> Optional[bytes]:
@@ -157,5 +159,7 @@ class DriveService:
             return file_buffer.read()
             
         except Exception as e:
-            print(f"Error downloading file {file_id}: {str(e)}")
+            # Log error for debugging but return None to allow processing to continue
+            import logging
+            logging.error(f"Error downloading file {file_id}: {str(e)}")
             return None

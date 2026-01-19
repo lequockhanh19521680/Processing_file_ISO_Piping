@@ -10,7 +10,8 @@ function App() {
   const [success, setSuccess] = useState('');
   const [downloadUrl, setDownloadUrl] = useState(null);
 
-  // Backend API base URL
+  // Backend API base URL - use environment variable in production
+  // Example: const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const API_BASE_URL = 'http://localhost:8000';
 
   const handleFileChange = (event) => {

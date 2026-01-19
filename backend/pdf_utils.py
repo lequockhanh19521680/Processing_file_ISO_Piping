@@ -55,7 +55,9 @@ class PDFTextExtractor:
             return full_text
             
         except Exception as e:
-            print(f"Error extracting text from PDF {file_id}: {str(e)}")
+            # Log error but don't raise - allow processing to continue with other PDFs
+            import logging
+            logging.error(f"Error extracting text from PDF {file_id}: {str(e)}")
             # Cache empty string for failed extractions to avoid retrying
             self.text_cache[file_id] = ""
             return ""
