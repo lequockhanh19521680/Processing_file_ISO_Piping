@@ -22,14 +22,17 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     
     // AWS Secrets Manager for Google Drive API credentials
     // These should be manually set after deployment using AWS CLI or Console:
-    // aws secretsmanager put-secret-value --secret-id GoogleDriveAPICredentials --secret-string '{"api_key":"your_key","api_token":"your_token"}'
+    // aws secretsmanager put-secret-value --secret-id processing-file-iso/google-drive-credentials \
+    //   --secret-string '{"access_token":"YOUR_TOKEN","refresh_token":"YOUR_REFRESH","client_id":"YOUR_CLIENT_ID","client_secret":"YOUR_CLIENT_SECRET"}'
     const googleDriveSecret = new secretsmanager.Secret(this, 'GoogleDriveAPICredentials', {
       secretName: 'processing-file-iso/google-drive-credentials',
-      description: 'Google Drive API credentials for file processing',
+      description: 'Google Drive API OAuth credentials for file processing',
       generateSecretString: {
         secretStringTemplate: JSON.stringify({
-          api_key: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT',
-          api_token: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT'
+          access_token: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT',
+          refresh_token: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT',
+          client_id: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT',
+          client_secret: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT'
         }),
         generateStringKey: 'placeholder',
       },
@@ -114,12 +117,11 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     resultsBucket.grantReadWrite(scanWorker);
     googleDriveSecret.grantRead(scanWorker);
 
-    // Note: Textract permissions removed from dispatcher as it's no longer needed there.
-    // If Textract integration is needed in the future, add to ScanWorker:
-    // scanWorker.addToRolePolicy(new iam.PolicyStatement({
-    //   actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
-    //   resources: ['*'],
-    // }));
+    // Textract permissions for real text extraction from PDFs
+    scanWorker.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
+      resources: ['*'],
+    }));
 
     // Add SQS as event source for ScanWorker
     scanWorker.addEventSource(
