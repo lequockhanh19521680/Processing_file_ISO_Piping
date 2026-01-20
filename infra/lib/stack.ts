@@ -41,7 +41,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
 
     // SQS Queue for file processing
     const processingQueue = new sqs.Queue(this, 'ProcessingQueue', {
-      visibilityTimeout: cdk.Duration.seconds(30),
+      visibilityTimeout: cdk.Duration.seconds(180), // 6x Lambda timeout for retries
       retentionPeriod: cdk.Duration.days(1),
     });
 

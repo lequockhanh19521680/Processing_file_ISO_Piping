@@ -134,7 +134,7 @@ User Browser (Download Button)
 ## SQS Message Schema
 
 **Queue**: `ProcessingQueue`
-**Visibility Timeout**: 30 seconds
+**Visibility Timeout**: 180 seconds (6x Lambda timeout)
 **Batch Size**: 10 messages per Lambda invocation
 
 **Message Body**:
