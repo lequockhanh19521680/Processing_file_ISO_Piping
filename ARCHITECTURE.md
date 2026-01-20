@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the real-time file processing system architecture using AWS services and WebSocket communication.
+This document describes the **async event-driven file processing system** using AWS services with WebSocket for real-time user feedback. The system is designed to process thousands of files (6,600+) without Lambda timeout issues by using **SQS for distributed processing** and **DynamoDB for state management**.
 
 ## Architecture Diagram
 
@@ -27,35 +27,67 @@ This document describes the real-time file processing system architecture using 
 │  │  - $connect    → ConnectHandler Lambda                     │     │
 │  │  - $disconnect → DisconnectHandler Lambda                  │     │
 │  │  - $default    → DefaultHandler Lambda                     │     │
-│  │  - start_scan  → ProcessHandler Lambda ⭐                   │     │
+│  │  - start_scan  → ScanDispatcher Lambda ⭐                   │     │
 │  └────────────────────────────────────────────────────────────┘     │
 └──────────────┬──────────────────────────────────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    AWS Lambda (ProcessHandler)                       │
+│                    AWS Lambda (ScanDispatcher)                       │
 │  ┌────────────────────────────────────────────────────────────┐     │
 │  │  1. Extract connectionId from event                        │     │
 │  │  2. Parse request (token, file_content, hole_codes)        │     │
-│  │  3. Initialize WebSocket Manager                           │     │
-│  │  4. Process files in batches                               │     │
-│  │     - Fetch from Google Drive (future)                     │     │
-│  │     - Extract text with Textract (future)                  │     │
-│  │     - Match hole codes                                     │     │
-│  │  5. Send real-time updates via WebSocket                   │     │
-│  │     - STARTED, PROGRESS, MATCH_FOUND, COMPLETE, ERROR      │     │
-│  │  6. Generate Excel report                                  │     │
-│  │  7. Upload to S3                                           │     │
+│  │  3. Generate unique session_id (UUID)                      │     │
+│  │  4. Store session metadata in DynamoDB                     │     │
+│  │  5. Batch send file metadata to SQS (10 per batch)         │     │
+│  │  6. Send STARTED message via WebSocket                     │     │
+│  │  7. Exit immediately (no processing)                       │     │
+│  └────────────────────────────────────────────────────────────┘     │
+└────┬────────────────────────────────────┬────────────────────────────┘
+     │                                    │
+     │ WebSocket Update                   │ Send Messages
+     │                                    │
+     ▼                                    ▼
+┌─────────────┐                  ┌─────────────────────────┐
+│   API GW    │                  │    Amazon SQS Queue     │
+│  Management │                  │  (ProcessingQueue)      │
+│     API     │                  │  - Decouples dispatch   │
+└─────────────┘                  │  - Batch processing     │
+                                 │  - Auto retry           │
+                                 └────────┬────────────────┘
+                                          │
+                                          │ Event Source (batch=10)
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      AWS Lambda (ScanWorker)                         │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │  1. Read batch of 10 messages from SQS                     │     │
+│  │  2. For each file:                                         │     │
+│  │     - Process file (extract text, match hole codes)        │     │
+│  │     - Write result to DynamoDB                             │     │
+│  │     - Atomic increment: processed_count                    │     │
+│  │     - Send PROGRESS update via WebSocket                   │     │
+│  │     - If match found → Send MATCH_FOUND                    │     │
+│  │  3. Check if processed_count == total_files                │     │
+│  │  4. If complete:                                           │     │
+│  │     - Query all results from DynamoDB                      │     │
+│  │     - Generate Excel report                                │     │
+│  │     - Upload to S3                                         │     │
+│  │     - Send COMPLETE with download URL                      │     │
 │  └────────────────────────────────────────────────────────────┘     │
 └────┬──────────────────────────────────────┬────────────────────┬────┘
      │                                      │                    │
-     │ Push updates                         │ Read/Write         │
+     │ Push updates                         │ Read/Write         │ Write
      │ via API Gateway                      │                    │
      │ Management API                       ▼                    ▼
      │                            ┌──────────────────┐  ┌─────────────┐
-     │                            │   AWS Textract   │  │   AWS S3    │
-     │                            │  (Future: OCR)   │  │  (Results)  │
-     │                            └──────────────────┘  └─────────────┘
+     │                            │   DynamoDB       │  │   AWS S3    │
+     │                            │  (ProcessResults)│  │  (Results)  │
+     │                            │  - Session state │  │  - Excel    │
+     │                            │  - File results  │  │    reports  │
+     │                            │  - Atomic counter│  └─────────────┘
+     │                            └──────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -85,7 +117,7 @@ User → Frontend → WebSocket API → $connect route → ConnectHandler Lambda
                                               connectionId stored
 ```
 
-### 2. Start Processing Request
+### 2. Start Processing Request (Dispatcher Phase)
 
 ```
 User clicks "Start Processing"
@@ -98,30 +130,43 @@ Frontend sends message:
   "target_hole_codes": ["HOLE-1", "HOLE-2", ...]
 }
     ↓
-WebSocket API → start_scan route → ProcessHandler Lambda
+WebSocket API → start_scan route → ScanDispatcher Lambda
+    ↓
+1. Generate session_id (UUID)
+    ↓
+2. Store session metadata in DynamoDB:
+   - session_id, file_name="meta"
+   - connection_id, total_files, processed_count=0
+    ↓
+3. Batch send file metadata to SQS (10 per batch)
+    ↓
+4. Send STARTED message to WebSocket
+    ↓
+5. Lambda exits (does not wait for processing)
 ```
 
-### 3. Real-time Processing Loop
+### 3. Asynchronous Processing Loop (Worker Phase)
 
 ```
-ProcessHandler Lambda:
+SQS Queue triggers ScanWorker Lambda (batch of 10 files)
     ↓
-1. Extract connectionId from event['requestContext']['connectionId']
-    ↓
-2. Initialize WebSocketManager with API Gateway Management API endpoint
-    ↓
-3. Send STARTED message
-    ↓
-4. For each batch of 10 files:
+For each file in batch:
+    ├─ Extract file metadata from SQS message
     ├─ Process file (extract text, match hole codes)
-    ├─ If match found → Send MATCH_FOUND message → Frontend adds row
-    └─ After batch → Send PROGRESS message → Frontend updates progress bar
+    ├─ Write result to DynamoDB (session_id, file_name)
+    ├─ Atomic increment processed_count in meta item
+    ├─ Retrieve meta to get connection_id, total_files
+    ├─ If match found → Send MATCH_FOUND → Frontend adds row
+    └─ Send PROGRESS message → Frontend updates progress bar
     ↓
-5. Generate Excel report
+Check if processed_count == total_files
     ↓
-6. Upload to S3
-    ↓
-7. Send COMPLETE message with download URL
+If complete:
+    ├─ Query all results from DynamoDB
+    ├─ Generate Excel report
+    ├─ Upload to S3
+    ├─ Generate presigned URL
+    └─ Send COMPLETE message with download URL
     ↓
 Frontend receives COMPLETE → Shows download button
 ```
@@ -199,19 +244,29 @@ Frontend receives COMPLETE → Shows download button
 | Resource | Type | Purpose |
 |----------|------|---------|
 | WebSocketApi | WebSocket API Gateway | Manages WebSocket connections |
-| ProcessHandler | Lambda Function | Main processing logic |
+| ScanDispatcher | Lambda Function | Dispatcher - sends files to SQS |
+| ScanWorker | Lambda Function | Worker - processes files from SQS |
 | ConnectHandler | Lambda Function | Handles $connect events |
 | DisconnectHandler | Lambda Function | Handles $disconnect events |
 | DefaultHandler | Lambda Function | Handles $default route |
+| ProcessingQueue | SQS Queue | Message queue for file processing tasks |
+| ProcessResultsTable | DynamoDB Table | Stores session state and file results |
 | ResultsBucket | S3 Bucket | Stores Excel reports |
 | DependenciesLayer | Lambda Layer | Python dependencies (boto3, openpyxl) |
 
 ### IAM Permissions
 
-#### ProcessHandler Lambda Role
+#### ScanDispatcher Lambda Role
 - `execute-api:ManageConnections` - Send messages to WebSocket clients
-- `s3:PutObject`, `s3:GetObject` - Upload/download from S3
-- `textract:*` - Process documents with Textract (future)
+- `sqs:SendMessage` - Send file metadata to SQS queue
+- `dynamodb:PutItem` - Store session metadata
+- `logs:*` - CloudWatch logging
+
+#### ScanWorker Lambda Role
+- `execute-api:ManageConnections` - Send progress updates to WebSocket clients
+- `dynamodb:UpdateItem` - Update processed_count atomically
+- `dynamodb:Query` - Retrieve session results
+- `s3:PutObject` - Upload Excel reports to S3
 - `logs:*` - CloudWatch logging
 
 ## Scalability
@@ -219,23 +274,35 @@ Frontend receives COMPLETE → Shows download button
 ### Concurrent Users
 - **WebSocket Connections**: API Gateway supports 100,000+ concurrent connections
 - **Lambda Concurrency**: Default 1,000 concurrent executions per region
+- **SQS Throughput**: Unlimited messages per second
+- **DynamoDB**: On-demand billing scales automatically
 - **S3**: Unlimited storage, 5,500 PUT requests/second per prefix
 
 ### Performance Optimization
-1. **Batch Processing**: Process 10 files at a time to reduce message frequency
-2. **Async Updates**: Send updates without blocking processing
-3. **S3 Presigned URLs**: Direct download from S3, no Lambda proxy
-4. **Lambda Layers**: Shared dependencies, faster cold starts
+1. **Event-Driven Architecture**: Dispatcher exits immediately, workers process in parallel
+2. **SQS Batching**: Process 10 files per Lambda invocation
+3. **DynamoDB Atomic Updates**: No race conditions on processed_count
+4. **Parallel Workers**: Multiple Lambda instances process simultaneously
+5. **S3 Presigned URLs**: Direct download from S3, no Lambda proxy
+6. **Lambda Layers**: Shared dependencies, faster cold starts
+
+### No Timeout Issues
+- **Old Architecture**: Single Lambda processes all files (15-min timeout for 6,600 files)
+- **New Architecture**: Each worker processes 10 files (~5 seconds), unlimited total files
 
 ## Cost Breakdown (Example: 6600 files)
 
 | Service | Usage | Cost |
 |---------|-------|------|
-| Lambda | 15 min × 2 GB × $0.0000166667 | ~$0.50 |
-| API Gateway WebSocket | 15 min × $0.25/M min | ~$0.004 |
+| Lambda (Dispatcher) | 1 invocation × 512 MB × 5s × $0.0000166667 | ~$0.0001 |
+| Lambda (Worker) | 660 invocations × 1024 MB × 5s × $0.0000166667 | ~$0.05 |
+| SQS | 6,600 messages × $0.40/M requests | ~$0.003 |
+| DynamoDB | 6,600 writes + 6,600 reads × $1.25/M requests | ~$0.02 |
+| API Gateway WebSocket | 10 min × $0.25/M min | ~$0.003 |
 | S3 Storage | 1 MB × $0.023/GB | ~$0.0001 |
-| Textract | 6600 pages × $0.0015/page | ~$9.90 |
-| **Total per run** | | **~$10.40** |
+| **Total per run (without Textract)** | | **~$0.07** |
+| Textract (optional) | 6600 pages × $0.0015/page | ~$9.90 |
+| **Total with Textract** | | **~$10.00** |
 
 ## Security
 
@@ -277,24 +344,29 @@ Frontend receives COMPLETE → Shows download button
 
 ## Future Enhancements
 
-1. **Step Functions**: For processing > 6600 files (beyond 15-min Lambda limit)
-2. **DynamoDB**: Store connection mappings, processing state
-3. **SQS**: Queue files for distributed processing
+1. **Google Drive API Integration**: Replace simulated files with real Google Drive file fetching
+2. **AWS Textract Integration**: Add OCR for PDF processing
+3. **DLQ (Dead Letter Queue)**: Handle failed message processing
 4. **CloudFront**: Host frontend static assets
-5. **Cognito**: User authentication
+5. **Cognito**: User authentication and authorization
 6. **EventBridge**: Scheduled processing triggers
 7. **SNS**: Email notifications on completion
+8. **X-Ray Tracing**: Distributed tracing for debugging
+9. **Pagination**: Support for very large file lists (10,000+)
+10. **Rate Limiting**: Prevent abuse of API
 
 ## Development vs Production
 
 | Aspect | Development | Production |
 |--------|-------------|------------|
 | Files | 100 (demo) | 6,600+ |
+| Architecture | Event-driven with SQS | Event-driven with SQS |
+| Timeout Risk | None | None (distributed processing) |
 | Authentication | None | Cognito/API Key |
 | Monitoring | Basic logs | Full observability |
 | Error handling | Simple | Retry logic, DLQ |
 | Frontend | Local (localhost:3000) | CloudFront |
-| Cost | ~$0.50/day | ~$10/run |
+| Cost | ~$0.01/day | ~$0.07/run (without Textract) |
 
 ## Deployment Topology
 
@@ -304,8 +376,10 @@ Developer Machine
 AWS CloudFormation Stack
     ↓ (creates)
 ├─ API Gateway WebSocket API
-├─ Lambda Functions (4)
-├─ S3 Bucket
+├─ Lambda Functions (6: Dispatcher, Worker, Connect, Disconnect, Default)
+├─ SQS Queue (ProcessingQueue)
+├─ DynamoDB Table (ProcessResultsTable)
+├─ S3 Bucket (ResultsBucket)
 ├─ IAM Roles & Policies
 └─ CloudWatch Log Groups
 ```
