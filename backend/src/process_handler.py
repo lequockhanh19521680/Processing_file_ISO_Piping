@@ -113,8 +113,9 @@ def handler(event, context):
         )
         
         # Batch send file metadata to SQS
-        # Note: Google Drive API credentials are accessed from environment variables
-        # GOOGLE_DRIVE_API_KEY and GOOGLE_DRIVE_API_TOKEN for actual implementation
+        # TODO: Integrate with Google Drive API using environment variables
+        # Use GOOGLE_DRIVE_API_KEY and GOOGLE_DRIVE_API_TOKEN to fetch actual files from google_drive_link
+        # For now, simulating file list as placeholder
         batch_size = 10
         for batch_start_idx in range(0, len(simulated_files), batch_size):
             batch = simulated_files[batch_start_idx:batch_start_idx + batch_size]

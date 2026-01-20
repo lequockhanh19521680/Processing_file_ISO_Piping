@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 
 const Dashboard = () => {
-  // WebSocket configuration - now hardcoded in the code
+  // WebSocket configuration from environment variable with fallback
   const websocketUrl = import.meta.env.VITE_WEBSOCKET_URL || 'wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod';
   const [shouldConnect, setShouldConnect] = useState(false);
   
