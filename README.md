@@ -178,46 +178,60 @@ The frontend will be available at `http://localhost:3000`
 
 1. **WebSocket Connection**: Frontend connects to API Gateway WebSocket API
 2. **Start Processing**: User clicks button, sends `start_scan` message
-3. **Lambda Processing**: 
-   - Lambda extracts connectionId from event
-   - Processes files in batches of 10
-   - Sends progress updates after each batch
-   - Sends immediate notifications for matches
-4. **Real-time Updates**: 
-   - Frontend receives messages via WebSocket
-   - Updates progress bar
-   - Adds rows to results table
-5. **Completion**:
-   - Lambda generates Excel report
+3. **Dispatcher Phase** (ScanDispatcher Lambda):
+   - Generates unique session_id
+   - Stores session metadata in DynamoDB
+   - Batches file metadata and sends to SQS queue
+   - Sends STARTED message via WebSocket
+   - Exits immediately (no waiting)
+4. **Worker Phase** (ScanWorker Lambda, triggered by SQS):
+   - Processes files in batches of 10 from SQS
+   - Writes results to DynamoDB
+   - Atomically updates processed_count
+   - Sends PROGRESS updates after each batch
+   - Sends MATCH_FOUND for immediate notifications
+5. **Completion Phase**:
+   - Worker detects processed_count == total_files
+   - Queries all results from DynamoDB
+   - Generates Excel report
    - Uploads to S3
-   - Sends download URL via WebSocket
+   - Sends COMPLETE with download URL via WebSocket
    - Frontend shows download button
 
 ## Key Benefits Over HTTP REST
 
-- ✅ **No Timeouts**: WebSocket stays open for 15+ minutes
+- ✅ **No Timeouts**: Event-driven architecture eliminates Lambda timeout issues
+- ✅ **Unlimited Scale**: Can process 6,600+ files without timeout
 - ✅ **Real-time Feedback**: User sees first result in seconds, not minutes
 - ✅ **Better UX**: Progress bar and live updates vs. spinner
 - ✅ **Scalable**: Multiple users can process simultaneously
-- ✅ **Event-Driven**: No polling required
+- ✅ **Event-Driven**: SQS decouples dispatcher from workers
+- ✅ **Fault Tolerant**: SQS retries failed messages automatically
 
-## Lambda Timeout Handling
+## Architecture Advantages
 
-The Lambda function has a 15-minute timeout. For processing more than 6600 files:
+The system now uses **async event-driven architecture** with SQS and DynamoDB:
 
-1. **Option 1**: Optimize processing (parallel Textract calls)
-2. **Option 2**: Implement Step Functions for pagination
-   - Process 1000 files → Checkpoint → Continue
-3. **Option 3**: Use SQS + multiple Lambdas for distributed processing
+1. **No Lambda Timeouts**: Dispatcher exits in seconds, workers process in parallel
+2. **Distributed Processing**: Multiple workers process files simultaneously
+3. **State Management**: DynamoDB tracks progress with atomic counters
+4. **Auto Scaling**: Lambda scales automatically based on SQS queue depth
+5. **Cost Effective**: Pay only for actual processing time (~$0.07 per 6,600 files)
 
 ## Customization
 
-### Backend (`backend/src/process_handler.py`):
+### Backend (`backend/src/process_handler.py` - Dispatcher):
+
+- Integrate with Google Drive API for file fetching
+- Adjust SQS batch size for different workloads
+- Modify session metadata structure
+
+### Backend (`backend/src/worker_handler.py` - Worker):
 
 - Update `extract_hole_codes_from_text()` for your hole code format
-- Integrate with Google Drive API for file fetching
 - Add Textract processing for PDF analysis
-- Adjust batch size (currently 10 files)
+- Customize result schema in DynamoDB
+- Adjust worker batch size (currently 10 files)
 
 ### Frontend (`frontend/src/Dashboard.jsx`):
 
@@ -228,7 +242,9 @@ The Lambda function has a 15-minute timeout. For processing more than 6600 files
 
 ### Infrastructure (`infra/lib/stack.ts`):
 
-- Adjust Lambda timeout/memory
+- Adjust Lambda timeout/memory for workers
+- Configure SQS visibility timeout and batch size
+- Set up DynamoDB table attributes
 - Configure S3 bucket policies
 - Add CloudWatch alarms
 - Set up custom domain for WebSocket API
@@ -264,32 +280,38 @@ The Lambda function has a 15-minute timeout. For processing more than 6600 files
 
 - Lambda: Pay per request and duration
 - API Gateway: Pay per connection minute and messages
+- SQS: Pay per message ($0.40/M requests)
+- DynamoDB: Pay per request (on-demand billing)
 - S3: Pay per storage and requests
-- Textract: Pay per page analyzed
 
-**Estimated cost for 6600 files**: ~$5-10 per run (depends on PDF pages)
+**Estimated cost for 6600 files**: 
+- Without Textract: ~$0.07 per run
+- With Textract: ~$10.00 per run (includes $9.90 for OCR)
 
 ## Next Steps
 
 1. ✅ Basic WebSocket implementation
 2. ✅ Real-time dashboard
 3. ✅ Progress tracking
-4. 🔄 Google Drive API integration
-5. 🔄 AWS Textract integration
-6. 🔄 Step Functions for large batches
-7. 🔄 Authentication/authorization
-8. 🔄 Production deployment
+4. ✅ Event-driven architecture with SQS + DynamoDB
+5. ✅ Scalable worker processing (no timeouts)
+6. 🔄 Google Drive API integration
+7. 🔄 AWS Textract integration
+8. 🔄 Authentication/authorization
+9. 🔄 Production deployment
 
 ## AWS Solutions Architect Professional Exam Relevance
 
 This implementation demonstrates:
 
-- ✅ **Event-Driven Architecture**: WebSocket for async communication
-- ✅ **Serverless**: Lambda, API Gateway, S3
-- ✅ **Scalability**: Multiple concurrent users
-- ✅ **Real-time Processing**: Streaming updates
-- ✅ **Cost Optimization**: Pay per use
-- ✅ **Best Practices**: IAM roles, CloudWatch logging
+- ✅ **Event-Driven Architecture**: WebSocket for async communication, SQS for decoupling
+- ✅ **Serverless**: Lambda, API Gateway, S3, DynamoDB, SQS
+- ✅ **Scalability**: Multiple concurrent users, unlimited file processing
+- ✅ **Real-time Processing**: Streaming updates via WebSocket
+- ✅ **State Management**: DynamoDB with atomic counters
+- ✅ **Cost Optimization**: Pay per use, no idle resources
+- ✅ **Fault Tolerance**: SQS retries, distributed workers
+- ✅ **Best Practices**: IAM roles, CloudWatch logging, loose coupling
 - ✅ **User Experience**: Progress feedback vs. blocking requests
 
 ## License
