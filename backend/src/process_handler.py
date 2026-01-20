@@ -18,6 +18,34 @@ GOOGLE_DRIVE_API_KEY = os.environ.get('GOOGLE_DRIVE_API_KEY', '')
 GOOGLE_DRIVE_API_TOKEN = os.environ.get('GOOGLE_DRIVE_API_TOKEN', '')
 
 
+def validate_environment_variables():
+    """
+    Validate required environment variables at startup.
+    Note: Google Drive API credentials are optional for simulation mode.
+    """
+    required_vars = {
+        'QUEUE_URL': QUEUE_URL,
+        'TABLE_NAME': TABLE_NAME,
+        'WEBSOCKET_API_ENDPOINT': WEBSOCKET_API_ENDPOINT
+    }
+    
+    missing = [name for name, value in required_vars.items() if not value]
+    
+    if missing:
+        print(f"Warning: Missing required environment variables: {', '.join(missing)}")
+        print("The application may not function correctly without these variables.")
+    
+    # Google Drive API credentials are optional for simulation mode
+    if not GOOGLE_DRIVE_API_KEY or not GOOGLE_DRIVE_API_TOKEN:
+        print("Info: Google Drive API credentials not set. Using simulation mode for file fetching.")
+    else:
+        print("Info: Google Drive API credentials configured.")
+
+
+# Validate environment on module load
+validate_environment_variables()
+
+
 class WebSocketManager:
     """Manage WebSocket connections and send updates to clients"""
     
@@ -81,7 +109,6 @@ def handler(event, context):
         
         print(f"Action: {action}, Connection: {connection_id}")
         print(f"Google Drive Link: {google_drive_link}")
-        print(f"Using API credentials from environment variables")
         
         # Generate unique session ID
         session_id = str(uuid.uuid4())
