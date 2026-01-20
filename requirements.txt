@@ -1,0 +1,17 @@
+# PDF Keyword Search Script - Requirements
+# Production-ready dependencies for searching keywords in PDF files
+
+# Excel file processing
+pandas>=2.1.0           # DataFrame operations and Excel I/O
+openpyxl>=3.1.2         # Excel file reading and writing (xlsx format)
+
+# PDF text extraction
+pdfplumber>=0.10.0      # Advanced PDF text extraction with better accuracy
+
+# Progress bar and UI
+tqdm>=4.66.0            # Professional progress bars for console
+
+# Standard library enhancements (included in Python 3.9+, listed for reference)
+# concurrent.futures      # Built-in: Concurrent execution with ThreadPoolExecutor
+# logging                 # Built-in: Comprehensive logging framework
+# pathlib                 # Built-in: Object-oriented filesystem paths
