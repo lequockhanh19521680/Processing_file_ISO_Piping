@@ -27,7 +27,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import pdfplumber
 from tqdm import tqdm
-import openpyxl
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
