@@ -229,7 +229,7 @@ const Dashboard = () => {
           <div className="flex space-x-4">
             <button
               onClick={handleStartProcessing}
-              disabled={isProcessing || !googleDriveLink}
+              disabled={isProcessing || !googleDriveLink || !websocketUrl}
               className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
               {isProcessing ? 'Processing...' : 'Start Processing'}

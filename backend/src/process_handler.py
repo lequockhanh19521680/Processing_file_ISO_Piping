@@ -113,7 +113,7 @@ def handler(event, context):
         target_hole_codes = body.get('target_hole_codes', [])
         
         print(f"Action: {action}, Connection: {connection_id}")
-        print(f"Google Drive Link: {google_drive_link}")
+        print(f"Received Google Drive link for processing")
         
         # Generate unique session ID
         session_id = str(uuid.uuid4())
