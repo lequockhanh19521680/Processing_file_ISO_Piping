@@ -152,6 +152,10 @@ def extract_text_with_pypdf(pdf_bytes: bytes) -> str:
     """
     Extract text from PDF using pypdf library.
     Works with native PDFs that have searchable text.
+    
+    Note: This method only works with native PDFs containing searchable text.
+    It will NOT work with scanned PDFs or image-based PDFs. For those cases,
+    OCR-based solutions like AWS Textract or Tesseract would be required.
     """
     try:
         pdf_buffer = io.BytesIO(pdf_bytes)
