@@ -113,16 +113,17 @@ The frontend will be available at `http://localhost:3000`
 1. **Configure Secrets and Deploy Infrastructure**:
    - See [SECURITY_DEPLOYMENT.md](./SECURITY_DEPLOYMENT.md) for detailed instructions on:
      - Setting up AWS Secrets Manager for Google Drive API credentials
-     - Configuring AWS Amplify for automatic frontend deployment
      - Managing environment variables securely
    - Quick start: Deploy CDK stack, then set secrets in AWS Secrets Manager
 
-2. **Local Development**:
-   - Frontend: Create `.env` file in `frontend/` directory with `VITE_WEBSOCKET_URL` from CDK output
-   - Backend: Secrets are automatically retrieved from AWS Secrets Manager by Lambda functions
+2. **Deploy Frontend**:
+   - **AWS Amplify (Manual Setup)**: AWS Amplify resources have been removed from the CDK stack to avoid deployment failures. You can set up Amplify manually in the AWS Console by connecting your GitHub repository with a personal access token.
+   - **Local Development**: Create `.env` file in `frontend/` directory with `VITE_WEBSOCKET_URL` from CDK output, then run `npm run dev`
+   - **S3 + CloudFront**: Build the frontend (`npm run build`) and upload to S3 with CloudFront distribution
+   - **Vercel/Netlify**: Connect your GitHub repository and set `VITE_WEBSOCKET_URL` environment variable
 
 3. **Open the Dashboard**: 
-   - Production: Access via Amplify URL (see CDK output: `AmplifyAppUrl`)
+   - Production: Access via your chosen hosting solution (Amplify, S3+CloudFront, Vercel, Netlify, etc.)
    - Development: Navigate to `http://localhost:3000` (after running `npm run dev`)
 
 4. **Enter Google Drive Link**:
@@ -287,7 +288,7 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 - ✅ **IAM Roles**: Lambda functions use least-privilege IAM roles
 - ✅ **WebSocket Authentication**: Connections authenticated via API Gateway
 - ✅ **S3 Security**: CORS configured, presigned URLs expire after 1 hour
-- ✅ **Automatic Deployment**: AWS Amplify with environment variable injection
+- ⚠️ **Production TODO**: Set up frontend deployment (Amplify, S3+CloudFront, Vercel, Netlify, etc.)
 - ⚠️ **Production TODO**: Add authentication/authorization (Cognito, API keys)
 - ⚠️ **Production TODO**: Validate input data thoroughly
 - ⚠️ **Production TODO**: Implement rate limiting (API Gateway throttling)
@@ -333,7 +334,7 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 4. ✅ Event-driven architecture with SQS + DynamoDB
 5. ✅ Scalable worker processing (no timeouts)
 6. ✅ **Secrets Management with AWS Secrets Manager**
-7. ✅ **AWS Amplify deployment configuration**
+7. 🔄 **Frontend deployment setup** (Amplify/S3+CloudFront/Vercel/Netlify)
 8. ✅ **Secure credential handling (no hardcoded secrets)**
 9. ✅ **Google Drive API integration (real, not mock)**
 10. ✅ **AWS Textract integration (real text extraction)**
@@ -348,7 +349,7 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 This implementation demonstrates:
 
 - ✅ **Event-Driven Architecture**: WebSocket for async communication, SQS for decoupling
-- ✅ **Serverless**: Lambda, API Gateway, S3, DynamoDB, SQS, Amplify
+- ✅ **Serverless**: Lambda, API Gateway, S3, DynamoDB, SQS
 - ✅ **Security**: Secrets Manager, Parameter Store, IAM roles, least-privilege access
 - ✅ **Scalability**: Multiple concurrent users, unlimited file processing
 - ✅ **Real-time Processing**: Streaming updates via WebSocket
@@ -356,7 +357,7 @@ This implementation demonstrates:
 - ✅ **Cost Optimization**: Pay per use, no idle resources
 - ✅ **Fault Tolerance**: SQS retries, distributed workers
 - ✅ **Best Practices**: No hardcoded credentials, IAM roles, CloudWatch logging, loose coupling
-- ✅ **CI/CD**: Automated deployment with AWS Amplify
+- 🔄 **CI/CD**: Frontend deployment automation (can be set up manually)
 - ✅ **User Experience**: Progress feedback vs. blocking requests
 
 ## License
