@@ -312,7 +312,7 @@ class PDFKeywordSearcher:
                 # Prepare result for this keyword
                 if best_match:
                     # Determine Match_Count/Status based on frequency
-                    # max_count is guaranteed to be > 0 here since best_match exists
+                    # Note: max_count > 0 is guaranteed when best_match exists (invariant from line 305)
                     if max_count == 1:
                         status = "1"
                     else:  # max_count >= 2
