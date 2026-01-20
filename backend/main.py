@@ -8,10 +8,13 @@ and PDF text extraction to match ma_ho values against PDF content.
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict
+from typing import List, Dict, AsyncGenerator
 import io
 import os
 from datetime import datetime
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from drive_service import DriveService
 from pdf_utils import PDFTextExtractor
@@ -35,6 +38,159 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.post("/process-with-progress")
+async def process_file_with_progress(
+    file: UploadFile = File(..., description="Excel file with ma_ho values"),
+    drive_link: str = Form(..., description="Google Drive folder URL")
+):
+    """
+    Process Excel file with real-time progress updates using Server-Sent Events.
+    
+    Returns a stream of progress events followed by the final Excel file.
+    """
+    
+    async def generate_progress_and_file():
+        try:
+            # Send initial progress
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'reading_excel', 'message': 'Reading Excel file...'})}\n\n"
+            
+            # Step 1: Read the uploaded Excel file
+            file_content = await file.read()
+            excel_processor = ExcelProcessor()
+            ma_ho_values = excel_processor.read_input_excel(file_content)
+            
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'excel_read', 'message': f'Found {len(ma_ho_values)} ma_ho values', 'count': len(ma_ho_values)})}\n\n"
+            
+            if not ma_ho_values:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No ma_ho values found in Excel file'})}\n\n"
+                return
+            
+            # Step 2: Authenticate with Google Drive
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'authenticating', 'message': 'Authenticating with Google Drive...'})}\n\n"
+            drive_service = DriveService()
+            drive_service.authenticate()
+            
+            # Step 3: Extract folder ID and list all PDF files
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'listing_files', 'message': 'Listing PDF files in Drive folder...'})}\n\n"
+            folder_id = drive_service.extract_folder_id(drive_link)
+            pdf_files = drive_service.list_pdf_files_recursive(folder_id)
+            
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'files_listed', 'message': f'Found {len(pdf_files)} PDF files', 'total_files': len(pdf_files)})}\n\n"
+            
+            if not pdf_files:
+                # No PDFs found - mark all as NOT FOUND
+                results = []
+                for ma_ho in ma_ho_values:
+                    results.append({
+                        "ma_ho": ma_ho,
+                        "found": "NO",
+                        "file_name": "",
+                        "file_id": "",
+                        "folder_path": ""
+                    })
+                
+                excel_processor.create_result_sheet(results)
+                output_bytes = excel_processor.save_to_bytes()
+                
+                yield f"data: {json.dumps({'type': 'complete', 'message': 'Processing complete (no PDFs found)'})}\n\n"
+                yield output_bytes
+                return
+            
+            # Step 4: Download and extract text from all PDFs in parallel
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'processing_pdfs', 'message': 'Processing PDFs in parallel...'})}\n\n"
+            pdf_extractor = PDFTextExtractor()
+            pdf_text_data = []
+            
+            # Use ThreadPoolExecutor for parallel processing
+            max_workers = min(10, len(pdf_files))
+            processed_count = 0
+            
+            def process_with_progress(pdf_info):
+                return _download_and_extract_pdf(drive_service, pdf_extractor, pdf_info)
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_pdf = {
+                    executor.submit(process_with_progress, pdf_info): pdf_info 
+                    for pdf_info in pdf_files
+                }
+                
+                for future in as_completed(future_to_pdf):
+                    pdf_info = future_to_pdf[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            pdf_text_data.append(result)
+                        processed_count += 1
+                        
+                        # Send progress update every 10 files or at key milestones
+                        if processed_count % 10 == 0 or processed_count == len(pdf_files):
+                            yield f"data: {json.dumps({'type': 'progress', 'stage': 'processing_pdfs', 'message': f'Processing PDF {processed_count}/{len(pdf_files)}: {pdf_info[\"file_name\"]}', 'current': processed_count, 'total': len(pdf_files)})}\n\n"
+                    except Exception as e:
+                        print(f"Error processing {pdf_info['file_name']}: {str(e)}")
+            
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'pdfs_processed', 'message': f'Extracted text from {len(pdf_text_data)} PDFs'})}\n\n"
+            
+            # Step 5: Search for each ma_ho in all PDF texts
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'searching', 'message': 'Searching for ma_ho values...'})}\n\n"
+            results = []
+            
+            for idx, ma_ho in enumerate(ma_ho_values, 1):
+                found = False
+                matching_file = None
+                
+                for pdf_data in pdf_text_data:
+                    if pdf_extractor.search_text(pdf_data['text'], ma_ho):
+                        found = True
+                        matching_file = pdf_data
+                        break
+                
+                if found and matching_file:
+                    results.append({
+                        "ma_ho": ma_ho,
+                        "found": "YES",
+                        "file_name": matching_file['file_name'],
+                        "file_id": matching_file['file_id'],
+                        "folder_path": matching_file['folder_path']
+                    })
+                    yield f"data: {json.dumps({'type': 'search_result', 'ma_ho': ma_ho, 'found': True, 'file_name': matching_file['file_name'], 'current': idx, 'total': len(ma_ho_values)})}\n\n"
+                else:
+                    results.append({
+                        "ma_ho": ma_ho,
+                        "found": "NO",
+                        "file_name": "",
+                        "file_id": "",
+                        "folder_path": ""
+                    })
+                    yield f"data: {json.dumps({'type': 'search_result', 'ma_ho': ma_ho, 'found': False, 'current': idx, 'total': len(ma_ho_values)})}\n\n"
+            
+            # Step 6: Create RESULT sheet and save
+            yield f"data: {json.dumps({'type': 'progress', 'stage': 'creating_result', 'message': 'Creating result sheet...'})}\n\n"
+            excel_processor.create_result_sheet(results)
+            output_bytes = excel_processor.save_to_bytes()
+            
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Processing complete!'})}\n\n"
+            
+            # Send the file as base64
+            import base64
+            file_b64 = base64.b64encode(output_bytes).decode('utf-8')
+            yield f"data: {json.dumps({'type': 'file', 'data': file_b64, 'filename': 'processed_result.xlsx'})}\n\n"
+            
+        except Exception as e:
+            print(f"Error in process_file_with_progress: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_progress_and_file(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @app.get("/")
@@ -119,29 +275,35 @@ async def process_file(
                 }
             )
         
-        # Step 4: Download and extract text from all PDFs (with caching)
-        print("Downloading and extracting text from PDFs...")
+        # Step 4: Download and extract text from all PDFs in parallel
+        print("Downloading and extracting text from PDFs in parallel...")
         pdf_extractor = PDFTextExtractor()
         pdf_text_data = []
         
-        for idx, pdf_info in enumerate(pdf_files, 1):
-            print(f"Processing PDF {idx}/{len(pdf_files)}: {pdf_info['file_name']}")
+        # Use ThreadPoolExecutor for parallel processing
+        max_workers = min(10, len(pdf_files))  # Limit concurrent downloads
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all download tasks
+            future_to_pdf = {
+                executor.submit(
+                    _download_and_extract_pdf, 
+                    drive_service, 
+                    pdf_extractor, 
+                    pdf_info
+                ): pdf_info 
+                for pdf_info in pdf_files
+            }
             
-            # Download PDF content
-            pdf_content = drive_service.download_file(pdf_info['file_id'])
-            if not pdf_content:
-                print(f"  Failed to download {pdf_info['file_name']}")
-                continue
-            
-            # Extract text (cached)
-            text = pdf_extractor.extract_text(pdf_content, pdf_info['file_id'])
-            
-            pdf_text_data.append({
-                'file_id': pdf_info['file_id'],
-                'file_name': pdf_info['file_name'],
-                'folder_path': pdf_info['folder_path'],
-                'text': text
-            })
+            # Process completed tasks
+            for idx, future in enumerate(as_completed(future_to_pdf), 1):
+                pdf_info = future_to_pdf[future]
+                try:
+                    result = future.result()
+                    if result:
+                        pdf_text_data.append(result)
+                        print(f"Processed PDF {idx}/{len(pdf_files)}: {pdf_info['file_name']}")
+                except Exception as e:
+                    print(f"Error processing {pdf_info['file_name']}: {str(e)}")
         
         print(f"Successfully extracted text from {len(pdf_text_data)} PDFs")
         
@@ -214,6 +376,39 @@ async def process_file(
             status_code=500,
             detail=f"An error occurred during processing: {str(e)}"
         )
+
+
+def _download_and_extract_pdf(drive_service: DriveService, pdf_extractor: PDFTextExtractor, pdf_info: Dict) -> Dict:
+    """
+    Helper function to download and extract text from a single PDF.
+    Used for parallel processing.
+    
+    Args:
+        drive_service: Google Drive service instance
+        pdf_extractor: PDF text extractor instance
+        pdf_info: Dictionary with file_id, file_name, and folder_path
+        
+    Returns:
+        Dictionary with extracted text and file info, or None if failed
+    """
+    try:
+        # Download PDF content
+        pdf_content = drive_service.download_file(pdf_info['file_id'])
+        if not pdf_content:
+            return None
+        
+        # Extract text (cached)
+        text = pdf_extractor.extract_text(pdf_content, pdf_info['file_id'])
+        
+        return {
+            'file_id': pdf_info['file_id'],
+            'file_name': pdf_info['file_name'],
+            'folder_path': pdf_info['folder_path'],
+            'text': text
+        }
+    except Exception as e:
+        print(f"Error in _download_and_extract_pdf for {pdf_info['file_name']}: {str(e)}")
+        return None
 
 
 if __name__ == "__main__":

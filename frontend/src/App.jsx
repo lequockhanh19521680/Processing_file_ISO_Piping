@@ -9,6 +9,9 @@ function App() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [downloadUrl, setDownloadUrl] = useState(null);
+  const [progress, setProgress] = useState([]);
+  const [currentStage, setCurrentStage] = useState('');
+  const [showProgress, setShowProgress] = useState(false);
 
   // Backend API base URL - use environment variable in production
   // Example: const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -60,6 +63,9 @@ function App() {
     setError('');
     setSuccess('');
     setDownloadUrl(null);
+    setProgress([]);
+    setCurrentStage('');
+    setShowProgress(true);
 
     try {
       // Create FormData for multipart/form-data request
@@ -67,47 +73,76 @@ function App() {
       formData.append('file', file);
       formData.append('drive_link', driveLink);
 
-      // Send POST request to backend
-      const response = await axios.post(`${API_BASE_URL}/process`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        responseType: 'blob', // Important for file download
+      // Use the progress endpoint with SSE
+      const response = await fetch(`${API_BASE_URL}/process-with-progress`, {
+        method: 'POST',
+        body: formData,
       });
 
-      // Create a download URL for the processed file
-      const blob = new Blob([response.data], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = window.URL.createObjectURL(blob);
-      setDownloadUrl(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-      setSuccess('Processing completed successfully! Click the download button below.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              
+              if (data.type === 'progress') {
+                setCurrentStage(data.message);
+                setProgress(prev => [...prev, { type: 'info', message: data.message, stage: data.stage }]);
+              } else if (data.type === 'search_result') {
+                const message = data.found 
+                  ? `✓ ${data.ma_ho} found in ${data.file_name}` 
+                  : `✗ ${data.ma_ho} not found`;
+                setProgress(prev => [...prev, { 
+                  type: data.found ? 'success' : 'warning', 
+                  message,
+                  current: data.current,
+                  total: data.total 
+                }]);
+              } else if (data.type === 'complete') {
+                setCurrentStage(data.message);
+                setProgress(prev => [...prev, { type: 'success', message: data.message }]);
+              } else if (data.type === 'file') {
+                // Convert base64 back to blob
+                const binaryString = atob(data.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], {
+                  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                });
+                const url = window.URL.createObjectURL(blob);
+                setDownloadUrl(url);
+                setSuccess('Processing completed successfully! Click the download button below.');
+              } else if (data.type === 'error') {
+                setError(data.message);
+                setProgress(prev => [...prev, { type: 'error', message: data.message }]);
+              }
+            } catch (e) {
+              console.error('Error parsing SSE data:', e);
+            }
+          }
+        }
+      }
       
     } catch (err) {
       console.error('Error processing file:', err);
-      
-      if (err.response) {
-        // Server responded with error
-        if (err.response.data instanceof Blob) {
-          // Error message might be in blob format
-          const text = await err.response.data.text();
-          try {
-            const errorData = JSON.parse(text);
-            setError(errorData.detail || 'An error occurred during processing');
-          } catch {
-            setError(text || 'An error occurred during processing');
-          }
-        } else {
-          setError(err.response.data.detail || 'An error occurred during processing');
-        }
-      } else if (err.request) {
-        // Request made but no response
-        setError('Cannot connect to server. Please ensure the backend is running on port 8000.');
-      } else {
-        // Other errors
-        setError('An unexpected error occurred');
-      }
+      setError(err.message || 'An error occurred during processing');
     } finally {
       setLoading(false);
     }
@@ -197,6 +232,28 @@ function App() {
         {success && (
           <div className="alert alert-success">
             <strong>Success:</strong> {success}
+          </div>
+        )}
+
+        {/* Progress Display */}
+        {showProgress && (
+          <div className="progress-container">
+            <h3>Processing Progress:</h3>
+            {currentStage && (
+              <div className="current-stage">
+                <strong>Current:</strong> {currentStage}
+              </div>
+            )}
+            <div className="progress-list">
+              {progress.map((item, index) => (
+                <div key={index} className={`progress-item progress-${item.type}`}>
+                  {item.message}
+                  {item.current && item.total && (
+                    <span className="progress-count"> ({item.current}/{item.total})</span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
