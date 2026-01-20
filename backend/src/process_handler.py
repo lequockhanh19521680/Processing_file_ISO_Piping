@@ -389,6 +389,7 @@ def handler(event, context):
             'type': 'STARTED',
             'message': 'Processing started',
             'session_id': session_id,
+            'total_files': total_files,
             'timestamp': datetime.now().isoformat()
         })
         
