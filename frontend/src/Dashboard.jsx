@@ -3,7 +3,8 @@ import useWebSocket, { ReadyState } from 'react-use-websocket';
 
 const Dashboard = () => {
   // WebSocket configuration from environment variable with fallback
-  const websocketUrl = import.meta.env.VITE_WEBSOCKET_URL || 'wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod';
+  // Set VITE_WEBSOCKET_URL in .env file or the connection will fail
+  const websocketUrl = import.meta.env.VITE_WEBSOCKET_URL || '';
   const [shouldConnect, setShouldConnect] = useState(false);
   
   // Form state
@@ -117,6 +118,11 @@ const Dashboard = () => {
   
   // Start processing
   const handleStartProcessing = () => {
+    if (!websocketUrl) {
+      alert('WebSocket URL is not configured. Please set VITE_WEBSOCKET_URL in your .env file.');
+      return;
+    }
+    
     if (!googleDriveLink) {
       alert('Please enter Google Drive Link');
       return;
@@ -192,7 +198,7 @@ const Dashboard = () => {
                 type="text"
                 value={googleDriveLink}
                 onChange={(e) => setGoogleDriveLink(e.target.value)}
-                placeholder="https://drive.google.com/drive/folders/xxxxx"
+                placeholder="https://drive.google.com/drive/folders/1a2b3c4d5e6f7g8h9i0j"
                 className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={isProcessing}
               />

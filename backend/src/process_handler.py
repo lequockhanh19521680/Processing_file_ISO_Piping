@@ -21,7 +21,12 @@ GOOGLE_DRIVE_API_TOKEN = os.environ.get('GOOGLE_DRIVE_API_TOKEN', '')
 def validate_environment_variables():
     """
     Validate required environment variables at startup.
-    Note: Google Drive API credentials are optional for simulation mode.
+    
+    This function checks for required AWS environment variables and prints warnings
+    if they are missing. Google Drive API credentials are optional for simulation mode.
+    
+    Note: This function does not halt execution, it only logs warnings.
+    The application will still start but may not function correctly without required variables.
     """
     required_vars = {
         'QUEUE_URL': QUEUE_URL,
