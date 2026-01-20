@@ -9,7 +9,7 @@ import os
 from typing import List, Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ..config import DEFAULT_MAX_WORKERS, CASE_SENSITIVE_SEARCH
+from ..config import DEFAULT_MAX_WORKERS, CASE_SENSITIVE_SEARCH, MAX_LOCATION_PATH_LENGTH, LOCATION_PATH_SUFFIX_LENGTH
 from ..core.pdf_processor import extract_text_from_pdf, count_keyword_occurrences
 from ..utils.logger import get_logger
 
@@ -140,8 +140,8 @@ class SearchEngine:
                     if status_callback:
                         folder = os.path.dirname(pdf_path)
                         # Shorten path if too long
-                        if len(folder) > 50:
-                            folder = "..." + folder[-47:]
+                        if len(folder) > MAX_LOCATION_PATH_LENGTH:
+                            folder = "..." + folder[-LOCATION_PATH_SUFFIX_LENGTH:]
                         status_callback(keyword, folder, "Searching...")
                     
                     try:
@@ -155,16 +155,16 @@ class SearchEngine:
                             # Update status on finding a match
                             if status_callback:
                                 folder = os.path.dirname(pdf_path)
-                                if len(folder) > 50:
-                                    folder = "..." + folder[-47:]
+                                if len(folder) > MAX_LOCATION_PATH_LENGTH:
+                                    folder = "..." + folder[-LOCATION_PATH_SUFFIX_LENGTH:]
                                 status_callback(keyword, folder, "Found Match")
                             
                     except Exception as e:
                         logger.error(f"Task failed for {pdf_path}: {str(e)}", exc_info=True)
                         if status_callback:
                             folder = os.path.dirname(pdf_path)
-                            if len(folder) > 50:
-                                folder = "..." + folder[-47:]
+                            if len(folder) > MAX_LOCATION_PATH_LENGTH:
+                                folder = "..." + folder[-LOCATION_PATH_SUFFIX_LENGTH:]
                             status_callback(keyword, folder, "Error")
                 
                 # Prepare result for this keyword with Match_Type

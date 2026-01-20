@@ -34,8 +34,11 @@ import sys
 import os
 from pathlib import Path
 
-# Add src directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Ensure the package directory is in the Python path for imports
+# This allows running the script from any directory
+_PACKAGE_DIR = Path(__file__).parent
+if str(_PACKAGE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_DIR))
 
 from src.config import APP_NAME, VERSION, OUTPUT_DIR
 from src.core.pdf_processor import find_pdf_files

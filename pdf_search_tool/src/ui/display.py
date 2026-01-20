@@ -22,7 +22,13 @@ from rich.layout import Layout
 from rich.live import Live
 from rich import box
 
-from ..config import APP_NAME, VERSION
+from ..config import (
+    APP_NAME,
+    VERSION,
+    MAX_KEYWORD_DISPLAY_LENGTH,
+    MAX_LOCATION_PATH_LENGTH,
+    LOCATION_PATH_SUFFIX_LENGTH
+)
 
 console = Console()
 
@@ -66,8 +72,8 @@ class ProgressDisplay:
         
         # Truncate keyword if too long
         keyword_display = self.current_keyword
-        if len(keyword_display) > 40:
-            keyword_display = keyword_display[:37] + "..."
+        if len(keyword_display) > MAX_KEYWORD_DISPLAY_LENGTH:
+            keyword_display = keyword_display[:MAX_KEYWORD_DISPLAY_LENGTH - 3] + "..."
         
         table.add_row("Current Keyword", keyword_display)
         table.add_row("Current Location", self.current_location)

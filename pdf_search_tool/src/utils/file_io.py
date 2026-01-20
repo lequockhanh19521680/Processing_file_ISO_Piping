@@ -114,8 +114,8 @@ def save_results_to_excel(
         
         result_sheet = workbook.create_sheet("RESULT")
         
-        # Write headers
-        headers = ["ma_ho", "found", "file_name", "file_path", "Match_Type"]
+        # Write headers using config
+        headers = list(RESULT_COLUMNS.values())
         for col_idx, header in enumerate(headers, start=1):
             result_sheet.cell(row=1, column=col_idx, value=header)
         

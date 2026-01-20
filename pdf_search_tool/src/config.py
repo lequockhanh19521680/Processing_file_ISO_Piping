@@ -52,3 +52,6 @@ CASE_SENSITIVE_SEARCH = False
 # UI Settings
 PROGRESS_BAR_NCOLS = 100
 STATUS_UPDATE_INTERVAL = 0.1  # seconds
+MAX_KEYWORD_DISPLAY_LENGTH = 40  # Maximum characters to display for keywords in UI
+MAX_LOCATION_PATH_LENGTH = 50  # Maximum characters to display for folder paths in UI
+LOCATION_PATH_SUFFIX_LENGTH = 47  # Characters to show from end of path when truncated
