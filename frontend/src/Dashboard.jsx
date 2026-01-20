@@ -218,7 +218,9 @@ const Dashboard = () => {
     // Validate that the URL is actually a Google Drive URL
     try {
       const url = new URL(googleDriveLink);
-      if (!url.hostname.endsWith('drive.google.com') && url.hostname !== 'drive.google.com') {
+      // Only allow exact match or subdomains of drive.google.com
+      const hostname = url.hostname.toLowerCase();
+      if (hostname !== 'drive.google.com' && !hostname.endsWith('.drive.google.com')) {
         setValidationError("Please enter a valid Google Drive URL (must be from drive.google.com)");
         return;
       }
