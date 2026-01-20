@@ -97,8 +97,9 @@ class SearchEngine:
         """
         Process all keywords against all PDF files using concurrent execution.
         
-        Uses ThreadPoolExecutor with the configured number of workers to process
-        multiple PDFs in parallel.
+        Uses a single ThreadPoolExecutor with the configured number of workers 
+        to process multiple PDFs in parallel, reusing the thread pool for 
+        efficiency across all keywords.
         
         Args:
             keywords: List of keywords to search for
@@ -116,14 +117,15 @@ class SearchEngine:
         
         results = []
         
-        for keyword_idx, keyword in enumerate(keywords):
-            logger.info(f"Processing keyword {keyword_idx + 1}/{len(keywords)}: {keyword}")
-            
-            best_match = None
-            max_count = 0
-            
-            # Process all PDFs for this keyword concurrently
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        # Create a single thread pool executor for all keyword processing
+        # This avoids the overhead of creating/destroying executors for each keyword
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for keyword_idx, keyword in enumerate(keywords):
+                logger.info(f"Processing keyword {keyword_idx + 1}/{len(keywords)}: {keyword}")
+                
+                best_match = None
+                max_count = 0
+                
                 # Submit all PDF search tasks for this keyword
                 future_to_pdf = {
                     executor.submit(self.search_keyword_in_pdf, pdf_path, keyword): pdf_path
@@ -164,39 +166,39 @@ class SearchEngine:
                             if len(folder) > 50:
                                 folder = "..." + folder[-47:]
                             status_callback(keyword, folder, "Error")
-            
-            # Prepare result for this keyword with Match_Type
-            if best_match:
-                # Format match_type based on count
-                if max_count == 1:
-                    match_type = "Single Match"
-                else:
-                    match_type = f"Multi Match ({max_count})"
                 
-                results.append({
-                    'ma_ho': keyword,
-                    'found': 'YES',
-                    'file_name': os.path.basename(best_match['pdf_path']),
-                    'file_path': best_match['pdf_path'],
-                    'match_type': match_type
-                })
-                logger.info(
-                    f"✓ Keyword '{keyword}' found {max_count} time(s) in "
-                    f"{os.path.basename(best_match['pdf_path'])}"
-                )
-            else:
-                results.append({
-                    'ma_ho': keyword,
-                    'found': 'NO',
-                    'file_name': '',
-                    'file_path': '',
-                    'match_type': ''
-                })
-                logger.info(f"✗ Keyword '{keyword}' not found")
-            
-            # Call progress callback
-            if progress_callback:
-                progress_callback(keyword_idx + 1, len(keywords))
+                # Prepare result for this keyword with Match_Type
+                if best_match:
+                    # Format match_type based on count
+                    if max_count == 1:
+                        match_type = "Single Match"
+                    else:
+                        match_type = f"Multi Match ({max_count})"
+                    
+                    results.append({
+                        'ma_ho': keyword,
+                        'found': 'YES',
+                        'file_name': os.path.basename(best_match['pdf_path']),
+                        'file_path': best_match['pdf_path'],
+                        'match_type': match_type
+                    })
+                    logger.info(
+                        f"✓ Keyword '{keyword}' found {max_count} time(s) in "
+                        f"{os.path.basename(best_match['pdf_path'])}"
+                    )
+                else:
+                    results.append({
+                        'ma_ho': keyword,
+                        'found': 'NO',
+                        'file_name': '',
+                        'file_path': '',
+                        'match_type': ''
+                    })
+                    logger.info(f"✗ Keyword '{keyword}' not found")
+                
+                # Call progress callback
+                if progress_callback:
+                    progress_callback(keyword_idx + 1, len(keywords))
         
         logger.info(
             f"Processing complete. Found matches for "
