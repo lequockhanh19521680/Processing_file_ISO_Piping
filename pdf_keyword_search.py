@@ -43,6 +43,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# Default number of concurrent workers for optimal performance
+DEFAULT_MAX_WORKERS = 50
+
+
 class PDFKeywordSearcher:
     """
     Main class for searching keywords in PDF files with concurrent processing.
@@ -57,13 +61,13 @@ class PDFKeywordSearcher:
         results (List[Dict]): Search results for each keyword
     """
     
-    def __init__(self, max_workers: int = 50):
+    def __init__(self, max_workers: int = DEFAULT_MAX_WORKERS):
         """
         Initialize the PDF Keyword Searcher.
         
         Args:
             max_workers (int): Maximum number of concurrent workers for ThreadPoolExecutor.
-                             Default is 50 for optimal performance with thousands of files.
+                             Default is DEFAULT_MAX_WORKERS (50) for optimal performance.
         """
         self.max_workers = max_workers
         self.keywords: List[str] = []
@@ -311,12 +315,10 @@ class PDFKeywordSearcher:
                 
                 # Prepare result for this keyword
                 if best_match:
-                    # Determine Match_Count/Status based on frequency
+                    # Determine status based on frequency (always show actual count)
                     # Note: max_count > 0 is guaranteed when best_match exists (invariant from line 305)
-                    if max_count == 1:
-                        status = "1"
-                    else:  # max_count >= 2
-                        status = f"{max_count}"  # Show actual count for 2+
+                    # Both match_count and status contain the count for consistency and clarity
+                    status = str(max_count)
                     
                     results.append({
                         'ma_ho': keyword,
@@ -463,9 +465,9 @@ def main():
     logger.info("=" * 80)
     
     try:
-        # Initialize searcher with 50 workers
-        print(f"[1/5] Initializing with 50 concurrent workers...")
-        searcher = PDFKeywordSearcher(max_workers=50)
+        # Initialize searcher with default max workers
+        print(f"[1/5] Initializing with {DEFAULT_MAX_WORKERS} concurrent workers...")
+        searcher = PDFKeywordSearcher(max_workers=DEFAULT_MAX_WORKERS)
         
         # Read keywords from Excel
         print(f"[2/5] Reading keywords from Excel file...")
