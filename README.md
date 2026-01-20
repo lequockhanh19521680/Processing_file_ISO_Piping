@@ -110,27 +110,36 @@ The frontend will be available at `http://localhost:3000`
 
 ## Usage
 
-1. **Configure Environment Variables**:
-   - Frontend: Create `.env` file in `frontend/` directory with `VITE_WEBSOCKET_URL`
-   - Backend: Set `GOOGLE_DRIVE_API_KEY` and `GOOGLE_DRIVE_API_TOKEN` in Lambda environment variables
+1. **Configure Secrets and Deploy Infrastructure**:
+   - See [SECURITY_DEPLOYMENT.md](./SECURITY_DEPLOYMENT.md) for detailed instructions on:
+     - Setting up AWS Secrets Manager for Google Drive API credentials
+     - Configuring AWS Amplify for automatic frontend deployment
+     - Managing environment variables securely
+   - Quick start: Deploy CDK stack, then set secrets in AWS Secrets Manager
 
-2. **Open the Dashboard**: Navigate to `http://localhost:3000`
+2. **Local Development**:
+   - Frontend: Create `.env` file in `frontend/` directory with `VITE_WEBSOCKET_URL` from CDK output
+   - Backend: Secrets are automatically retrieved from AWS Secrets Manager by Lambda functions
 
-3. **Enter Google Drive Link**:
+3. **Open the Dashboard**: 
+   - Production: Access via Amplify URL (see CDK output: `AmplifyAppUrl`)
+   - Development: Navigate to `http://localhost:3000` (after running `npm run dev`)
+
+4. **Enter Google Drive Link**:
    - Paste the Google Drive folder link containing files to process (e.g., `https://drive.google.com/drive/folders/xxxxx`)
    - Upload Excel file with target hole codes (optional)
 
-4. **Start Processing**:
+5. **Start Processing**:
    - Click "Start Processing"
    - Watch real-time updates:
      - Connection status indicator
      - Progress bar showing percentage
      - Live results table populating row-by-row
 
-5. **Download Results**:
+6. **Download Results**:
    - When complete, click "Download Final Excel"
 
-**Note**: WebSocket URL and Google Drive API credentials are now configured via environment variables, not in the UI.
+**Note**: All sensitive credentials are now securely stored in AWS Secrets Manager. See [SECURITY_DEPLOYMENT.md](./SECURITY_DEPLOYMENT.md) for setup instructions.
 
 ## WebSocket Message Types
 
@@ -256,13 +265,20 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 
 ## Security Considerations
 
-- ✅ WebSocket connections are authenticated via API Gateway
-- ✅ Lambda has IAM role with minimal permissions
-- ✅ S3 bucket has CORS configured
-- ✅ Presigned URLs expire after 1 hour
-- ⚠️ Add authentication/authorization for production
-- ⚠️ Validate input data thoroughly
-- ⚠️ Implement rate limiting
+- ✅ **Secrets Management**: Google Drive API credentials stored in AWS Secrets Manager
+- ✅ **Parameter Store**: WebSocket URL stored in AWS Systems Manager Parameter Store
+- ✅ **No Hardcoded Credentials**: All sensitive data retrieved at runtime
+- ✅ **IAM Roles**: Lambda functions use least-privilege IAM roles
+- ✅ **WebSocket Authentication**: Connections authenticated via API Gateway
+- ✅ **S3 Security**: CORS configured, presigned URLs expire after 1 hour
+- ✅ **Automatic Deployment**: AWS Amplify with environment variable injection
+- ⚠️ **Production TODO**: Add authentication/authorization (Cognito, API keys)
+- ⚠️ **Production TODO**: Validate input data thoroughly
+- ⚠️ **Production TODO**: Implement rate limiting (API Gateway throttling)
+- ⚠️ **Production TODO**: Enable AWS WAF for DDoS protection
+- ⚠️ **Production TODO**: Restrict CORS origins to production domain only
+
+**For detailed security setup instructions, see [SECURITY_DEPLOYMENT.md](./SECURITY_DEPLOYMENT.md)**
 
 ## Troubleshooting
 
@@ -300,23 +316,28 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 3. ✅ Progress tracking
 4. ✅ Event-driven architecture with SQS + DynamoDB
 5. ✅ Scalable worker processing (no timeouts)
-6. 🔄 Google Drive API integration
-7. 🔄 AWS Textract integration
-8. 🔄 Authentication/authorization
-9. 🔄 Production deployment
+6. ✅ **Secrets Management with AWS Secrets Manager**
+7. ✅ **AWS Amplify deployment configuration**
+8. ✅ **Secure credential handling (no hardcoded secrets)**
+9. 🔄 Google Drive API integration (credentials ready in Secrets Manager)
+10. 🔄 AWS Textract integration
+11. 🔄 Authentication/authorization (Cognito, API keys)
+12. 🔄 Production deployment with custom domain
 
 ## AWS Solutions Architect Professional Exam Relevance
 
 This implementation demonstrates:
 
 - ✅ **Event-Driven Architecture**: WebSocket for async communication, SQS for decoupling
-- ✅ **Serverless**: Lambda, API Gateway, S3, DynamoDB, SQS
+- ✅ **Serverless**: Lambda, API Gateway, S3, DynamoDB, SQS, Amplify
+- ✅ **Security**: Secrets Manager, Parameter Store, IAM roles, least-privilege access
 - ✅ **Scalability**: Multiple concurrent users, unlimited file processing
 - ✅ **Real-time Processing**: Streaming updates via WebSocket
 - ✅ **State Management**: DynamoDB with atomic counters
 - ✅ **Cost Optimization**: Pay per use, no idle resources
 - ✅ **Fault Tolerance**: SQS retries, distributed workers
-- ✅ **Best Practices**: IAM roles, CloudWatch logging, loose coupling
+- ✅ **Best Practices**: No hardcoded credentials, IAM roles, CloudWatch logging, loose coupling
+- ✅ **CI/CD**: Automated deployment with AWS Amplify
 - ✅ **User Experience**: Progress feedback vs. blocking requests
 
 ## License

@@ -10,11 +10,51 @@ from openpyxl import Workbook
 # AWS clients
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
+secretsmanager_client = boto3.client('secretsmanager')
 
 # Environment variables
 TABLE_NAME = os.environ.get('TABLE_NAME', '')
 RESULTS_BUCKET = os.environ.get('RESULTS_BUCKET', '')
 WEBSOCKET_API_ENDPOINT = os.environ.get('WEBSOCKET_API_ENDPOINT', '')
+GOOGLE_DRIVE_SECRET_ARN = os.environ.get('GOOGLE_DRIVE_SECRET_ARN', '')
+
+# Cache for secrets to avoid repeated API calls
+_secrets_cache = {}
+
+
+def get_google_drive_credentials() -> Dict[str, str]:
+    """
+    Retrieve Google Drive API credentials from AWS Secrets Manager.
+    
+    Returns:
+        Dictionary containing 'api_key' and 'api_token'
+    """
+    global _secrets_cache
+    
+    # Return cached credentials if available
+    if 'google_drive' in _secrets_cache:
+        return _secrets_cache['google_drive']
+    
+    if not GOOGLE_DRIVE_SECRET_ARN:
+        return {'api_key': '', 'api_token': ''}
+    
+    try:
+        response = secretsmanager_client.get_secret_value(SecretId=GOOGLE_DRIVE_SECRET_ARN)
+        secret_data = json.loads(response['SecretString'])
+        
+        credentials = {
+            'api_key': secret_data.get('api_key', ''),
+            'api_token': secret_data.get('api_token', '')
+        }
+        
+        # Cache the credentials
+        _secrets_cache['google_drive'] = credentials
+        
+        return credentials
+        
+    except Exception as e:
+        print(f"Error retrieving Google Drive credentials: {str(e)}")
+        return {'api_key': '', 'api_token': ''}
 
 
 class WebSocketManager:

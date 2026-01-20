@@ -21,14 +21,26 @@
       "processing_delay_ms": 0
     }
   },
-  "backend_environment": {
-    "note": "These variables should be set as environment variables in Lambda",
-    "WEBSOCKET_API_ENDPOINT": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod",
-    "GOOGLE_DRIVE_API_KEY": "your_google_drive_api_key",
-    "GOOGLE_DRIVE_API_TOKEN": "your_google_drive_api_token"
+  "security_note": "All sensitive credentials are now managed securely:",
+  "backend_secrets": {
+    "note": "Backend secrets are stored in AWS Secrets Manager",
+    "secrets_manager_secret_name": "processing-file-iso/google-drive-credentials",
+    "how_to_set": "See SECURITY_DEPLOYMENT.md for instructions",
+    "secret_structure": {
+      "api_key": "your_google_drive_api_key",
+      "api_token": "your_google_drive_api_token"
+    }
   },
   "frontend_environment": {
-    "note": "Create a .env file in frontend/ directory with this variable",
-    "VITE_WEBSOCKET_URL": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod"
+    "note": "Frontend environment variables are managed via AWS Amplify or .env files",
+    "amplify_automatic": "VITE_WEBSOCKET_URL is automatically injected by CDK during Amplify deployment",
+    "local_development": "Create .env file in frontend/ directory with VITE_WEBSOCKET_URL from CDK output",
+    "parameter_store_location": "/processing-file-iso/websocket-url"
+  },
+  "deployment": {
+    "note": "See SECURITY_DEPLOYMENT.md for complete deployment instructions",
+    "backend": "Deploy with CDK: cd infra && cdk deploy",
+    "frontend": "Automatic deployment via AWS Amplify on git push to main branch",
+    "manual_frontend": "Alternative: cd frontend && npm run build && deploy to S3/CloudFront"
   }
 }
