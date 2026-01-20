@@ -117,12 +117,6 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     resultsBucket.grantReadWrite(scanWorker);
     googleDriveSecret.grantRead(scanWorker);
 
-    // Textract permissions for real text extraction from PDFs
-    scanWorker.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
-      resources: ['*'],
-    }));
-
     // Add SQS as event source for ScanWorker
     scanWorker.addEventSource(
       new lambdaEventSources.SqsEventSource(processingQueue, {
