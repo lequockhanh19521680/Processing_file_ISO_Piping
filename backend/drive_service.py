@@ -85,6 +85,7 @@ class DriveService:
     def list_pdf_files_recursive(self, folder_id: str, parent_path: str = "") -> List[Dict]:
         """
         Recursively list all PDF files in a folder and its subfolders.
+        Optimized with better pagination handling.
         
         Args:
             folder_id: Google Drive folder ID
@@ -101,32 +102,42 @@ class DriveService:
         try:
             # Query for all items in the folder
             query = f"'{folder_id}' in parents and trashed=false"
-            results = self.service.files().list(
-                q=query,
-                fields="files(id, name, mimeType)",
-                pageSize=1000
-            ).execute()
+            page_token = None
             
-            items = results.get('files', [])
-            
-            for item in items:
-                item_id = item['id']
-                item_name = item['name']
-                mime_type = item['mimeType']
+            # Use pagination to handle large folders efficiently
+            while True:
+                results = self.service.files().list(
+                    q=query,
+                    fields="nextPageToken, files(id, name, mimeType)",
+                    pageSize=1000,
+                    pageToken=page_token
+                ).execute()
                 
-                # If it's a folder, recurse into it
-                if mime_type == 'application/vnd.google-apps.folder':
-                    subfolder_path = f"{parent_path}/{item_name}" if parent_path else item_name
-                    pdf_files.extend(
-                        self.list_pdf_files_recursive(item_id, subfolder_path)
-                    )
-                # If it's a PDF file, add it to the list
-                elif mime_type == 'application/pdf':
-                    pdf_files.append({
-                        'file_id': item_id,
-                        'file_name': item_name,
-                        'folder_path': parent_path if parent_path else '/'
-                    })
+                items = results.get('files', [])
+                
+                for item in items:
+                    item_id = item['id']
+                    item_name = item['name']
+                    mime_type = item['mimeType']
+                    
+                    # If it's a folder, recurse into it
+                    if mime_type == 'application/vnd.google-apps.folder':
+                        subfolder_path = f"{parent_path}/{item_name}" if parent_path else item_name
+                        pdf_files.extend(
+                            self.list_pdf_files_recursive(item_id, subfolder_path)
+                        )
+                    # If it's a PDF file, add it to the list
+                    elif mime_type == 'application/pdf':
+                        pdf_files.append({
+                            'file_id': item_id,
+                            'file_name': item_name,
+                            'folder_path': parent_path if parent_path else '/'
+                        })
+                
+                # Check if there are more pages
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
             
             return pdf_files
             
