@@ -1,7 +1,6 @@
 {
   "demo": {
-    "websocket_url": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod",
-    "google_drive_token": "demo_token_replace_with_real",
+    "google_drive_link": "https://drive.google.com/drive/folders/xxxxx",
     "target_hole_codes": [
       "HOLE-1",
       "HOLE-2",
@@ -16,11 +15,20 @@
     }
   },
   "production": {
-    "websocket_url": "REPLACE_AFTER_CDK_DEPLOY",
     "simulation": {
       "total_files": 6600,
       "batch_size": 10,
       "processing_delay_ms": 0
     }
+  },
+  "backend_environment": {
+    "note": "These variables should be set as environment variables in Lambda",
+    "WEBSOCKET_API_ENDPOINT": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod",
+    "GOOGLE_DRIVE_API_KEY": "your_google_drive_api_key",
+    "GOOGLE_DRIVE_API_TOKEN": "your_google_drive_api_token"
+  },
+  "frontend_environment": {
+    "note": "Create a .env file in frontend/ directory with this variable",
+    "VITE_WEBSOCKET_URL": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod"
   }
 }

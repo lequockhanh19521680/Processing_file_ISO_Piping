@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 
 const Dashboard = () => {
-  // WebSocket configuration
-  const [websocketUrl, setWebsocketUrl] = useState('');
+  // WebSocket configuration from environment variable with fallback
+  // Set VITE_WEBSOCKET_URL in .env file or the connection will fail
+  const websocketUrl = import.meta.env.VITE_WEBSOCKET_URL || '';
   const [shouldConnect, setShouldConnect] = useState(false);
   
   // Form state
-  const [googleDriveToken, setGoogleDriveToken] = useState('');
+  const [googleDriveLink, setGoogleDriveLink] = useState('');
   const [excelFile, setExcelFile] = useState(null);
   const [targetHoleCodes, setTargetHoleCodes] = useState([]);
   
@@ -118,12 +119,12 @@ const Dashboard = () => {
   // Start processing
   const handleStartProcessing = () => {
     if (!websocketUrl) {
-      alert('Please enter WebSocket URL');
+      alert('WebSocket URL is not configured. Please set VITE_WEBSOCKET_URL in your .env file.');
       return;
     }
     
-    if (!googleDriveToken) {
-      alert('Please enter Google Drive Token');
+    if (!googleDriveLink) {
+      alert('Please enter Google Drive Link');
       return;
     }
     
@@ -144,7 +145,7 @@ const Dashboard = () => {
   const sendProcessingRequest = () => {
     const message = {
       action: 'start_scan',
-      token: googleDriveToken,
+      drive_link: googleDriveLink,
       file_content: excelFile ? 'file_data_here' : '',
       target_hole_codes: targetHoleCodes
     };
@@ -188,33 +189,22 @@ const Dashboard = () => {
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <h2 className="text-xl font-semibold text-gray-800 mb-4">Control Panel</h2>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                WebSocket URL
+                Google Drive Link
               </label>
               <input
                 type="text"
-                value={websocketUrl}
-                onChange={(e) => setWebsocketUrl(e.target.value)}
-                placeholder="wss://xxxxx.execute-api.region.amazonaws.com/prod"
+                value={googleDriveLink}
+                onChange={(e) => setGoogleDriveLink(e.target.value)}
+                placeholder="https://drive.google.com/drive/folders/1a2b3c4d5e6f7g8h9i0j"
                 className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={isProcessing}
               />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Google Drive Token
-              </label>
-              <input
-                type="text"
-                value={googleDriveToken}
-                onChange={(e) => setGoogleDriveToken(e.target.value)}
-                placeholder="Enter your Google Drive API token"
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                disabled={isProcessing}
-              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter the Google Drive folder link containing the files to process
+              </p>
             </div>
           </div>
           
@@ -239,7 +229,7 @@ const Dashboard = () => {
           <div className="flex space-x-4">
             <button
               onClick={handleStartProcessing}
-              disabled={isProcessing || !websocketUrl || !googleDriveToken}
+              disabled={isProcessing || !googleDriveLink || !websocketUrl}
               className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
               {isProcessing ? 'Processing...' : 'Start Processing'}

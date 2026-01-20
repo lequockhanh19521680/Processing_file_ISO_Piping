@@ -47,6 +47,12 @@ cd ../frontend
 # Install dependencies
 npm install
 
+# Create environment file from example
+cp .env.example .env
+
+# Edit .env and set your WebSocket URL from CDK output
+# VITE_WEBSOCKET_URL=wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod
+
 # Start development server
 npm run dev
 
@@ -55,16 +61,17 @@ npm run dev
 
 ### 3. Using the Application
 
-1. **Copy WebSocket URL** from CDK output
-2. **Paste it** into the Dashboard WebSocket URL field
-3. **Enter** your Google Drive Token
-4. **Upload** Excel file with hole codes (optional for demo)
-5. **Click** "Start Processing"
-6. **Watch** real-time updates:
+1. **Open Dashboard**: Navigate to `http://localhost:3000`
+2. **Enter Google Drive Link**: Paste the Google Drive folder link containing your files
+3. **Upload Excel File**: Upload Excel file with hole codes (optional for demo)
+4. **Click** "Start Processing"
+5. **Watch** real-time updates:
    - Connection status turns green
    - Progress bar moves from 0% to 100%
    - Results appear row by row
-7. **Download** final Excel when complete
+6. **Download** final Excel when complete
+
+**Note**: WebSocket URL and Google Drive API credentials are now configured in the code/environment variables, not in the UI.
 
 ## Testing Without Real Data
 
