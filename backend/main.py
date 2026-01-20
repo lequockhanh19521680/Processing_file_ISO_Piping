@@ -51,15 +51,23 @@ async def process_file_with_progress(
     
     Returns a stream of progress events followed by the final Excel file.
     """
-    
+    # FIX: Read file content immediately while the file is still open.
+    # FastAPI closes the UploadFile immediately after the request handler returns,
+    # causing "I/O operation on closed file" if we try to read it inside the 
+    # StreamingResponse generator later.
+    try:
+        file_content = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read upload file: {str(e)}")
+
     async def generate_progress_and_file():
         try:
             # Send initial progress
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'reading_excel', 'message': 'Reading Excel file...'})}\n\n"
             
-            # Step 1: Read the uploaded Excel file
-            file_content = await file.read()
+            # Step 1: Process the already read Excel file content
             excel_processor = ExcelProcessor()
+            # Use the variable 'file_content' read above, instead of reading 'file' again
             ma_ho_values = excel_processor.read_input_excel(file_content)
             
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'excel_read', 'message': f'Found {len(ma_ho_values)} ma_ho values', 'count': len(ma_ho_values)})}\n\n"
@@ -96,7 +104,9 @@ async def process_file_with_progress(
                 output_bytes = excel_processor.save_to_bytes()
                 
                 yield f"data: {json.dumps({'type': 'complete', 'message': 'Processing complete (no PDFs found)'})}\n\n"
-                yield output_bytes
+                # Send the file as base64
+                file_b64 = base64.b64encode(output_bytes).decode('utf-8')
+                yield f"data: {json.dumps({'type': 'file', 'data': file_b64, 'filename': 'processed_result.xlsx'})}\n\n"
                 return
             
             # Step 4: Download and extract text from all PDFs in parallel
@@ -220,16 +230,6 @@ async def process_file(
 ):
     """
     Process Excel file by searching for ma_ho values in PDF files from Google Drive.
-    
-    Args:
-        file: Excel file (.xlsx) with column A containing ma_ho values
-        drive_link: Google Drive folder URL to search for PDF files
-        
-    Returns:
-        StreamingResponse: Updated Excel file with RESULT sheet
-        
-    Raises:
-        HTTPException: If processing fails
     """
     
     print(f"[{datetime.now()}] Starting processing request")
@@ -392,14 +392,6 @@ def _download_and_extract_pdf(drive_service: DriveService, pdf_extractor: PDFTex
     """
     Helper function to download and extract text from a single PDF.
     Used for parallel processing.
-    
-    Args:
-        drive_service: Google Drive service instance
-        pdf_extractor: PDF text extractor instance
-        pdf_info: Dictionary with file_id, file_name, and folder_path
-        
-    Returns:
-        Dictionary with extracted text and file info, or None if failed
     """
     try:
         # Download PDF content

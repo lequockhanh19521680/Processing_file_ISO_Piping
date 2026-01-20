@@ -1,42 +1,38 @@
 """
 Google Drive Service Module
-
-Handles authentication and file operations with Google Drive API
-using a service account for server-to-server authentication.
+Handles authentication and file operations with Google Drive API.
 """
-
 import os
 import re
+import logging
+import ssl
+import json
+import urllib.request
 from typing import List, Dict, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-import io
+from google.auth.transport.requests import Request as GoogleAuthRequest
+
+# --- FIX SSL (Level 1): Global Patch ---
+# Giữ lại patch này để đảm bảo các hàm list/search hoạt động tốt
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 
 class DriveService:
-    """
-    Manages Google Drive API operations including authentication,
-    folder listing, and file downloads.
-    """
-    
     def __init__(self, service_account_file: str = "service-account.json"):
-        """
-        Initialize the Drive service with service account credentials.
-        
-        Args:
-            service_account_file: Path to the service account JSON file
-        """
         self.service_account_file = service_account_file
         self.service = None
-        
+        self.credentials = None # Lưu credentials để dùng lại khi tải file
+        self.scopes = ['https://www.googleapis.com/auth/drive.readonly']
+
     def authenticate(self) -> None:
         """
         Authenticate with Google Drive using service account credentials.
-        
-        Raises:
-            FileNotFoundError: If service account file is not found
-            Exception: If authentication fails
         """
         if not os.path.exists(self.service_account_file):
             raise FileNotFoundError(
@@ -45,132 +41,100 @@ class DriveService:
             )
         
         try:
-            credentials = service_account.Credentials.from_service_account_file(
+            # 1. Load Credentials
+            self.credentials = service_account.Credentials.from_service_account_file(
                 self.service_account_file,
-                scopes=['https://www.googleapis.com/auth/drive.readonly']
+                scopes=self.scopes
             )
-            self.service = build('drive', 'v3', credentials=credentials)
+            
+            # 2. Build Service (Standard way)
+            self.service = build('drive', 'v3', credentials=self.credentials)
+            
         except Exception as e:
             raise Exception(f"Failed to authenticate with Google Drive: {str(e)}")
-    
+
     def extract_folder_id(self, drive_link: str) -> str:
-        """
-        Extract folder ID from Google Drive URL.
-        
-        Supports formats:
-        - https://drive.google.com/drive/folders/FOLDER_ID
-        - https://drive.google.com/drive/u/0/folders/FOLDER_ID
-        
-        Args:
-            drive_link: Google Drive folder URL
+        """Extract folder ID from various Google Drive URL formats."""
+        match = re.search(r'folders/([a-zA-Z0-9_-]+)', drive_link)
+        if match:
+            return match.group(1)
             
-        Returns:
-            Extracted folder ID
+        match = re.search(r'id=([a-zA-Z0-9_-]+)', drive_link)
+        if match:
+            return match.group(1)
             
-        Raises:
-            ValueError: If folder ID cannot be extracted
-        """
-        patterns = [
-            r'/folders/([a-zA-Z0-9_-]+)',
-            r'id=([a-zA-Z0-9_-]+)',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, drive_link)
-            if match:
-                return match.group(1)
-        
-        raise ValueError(f"Could not extract folder ID from link: {drive_link}")
-    
-    def list_pdf_files_recursive(self, folder_id: str, parent_path: str = "") -> List[Dict]:
-        """
-        Recursively list all PDF files in a folder and its subfolders.
-        Optimized with better pagination handling.
-        
-        Args:
-            folder_id: Google Drive folder ID
-            parent_path: Path of parent folders (for tracking location)
+        if 'http' not in drive_link and '/' not in drive_link:
+             return drive_link.strip()
+             
+        raise ValueError("Could not extract Folder ID from the provided link")
+
+    def list_pdf_files_recursive(self, folder_id: str) -> List[Dict]:
+        """List all PDF files in folder and subfolders."""
+        if not self.service:
+            self.authenticate()
             
-        Returns:
-            List of dictionaries containing file information:
-            - file_id: Google Drive file ID
-            - file_name: Name of the file
-            - folder_path: Full path to the file
-        """
-        pdf_files = []
+        files_list = []
         
-        try:
-            # Query for all items in the folder
-            query = f"'{folder_id}' in parents and trashed=false"
+        def _search_folder(f_id, current_path=""):
             page_token = None
-            
-            # Use pagination to handle large folders efficiently
             while True:
-                results = self.service.files().list(
-                    q=query,
-                    fields="nextPageToken, files(id, name, mimeType)",
-                    pageSize=1000,
-                    pageToken=page_token
-                ).execute()
-                
-                items = results.get('files', [])
-                
-                for item in items:
-                    item_id = item['id']
-                    item_name = item['name']
-                    mime_type = item['mimeType']
+                try:
+                    response = self.service.files().list(
+                        q=f"'{f_id}' in parents and trashed = false",
+                        fields="nextPageToken, files(id, name, mimeType)",
+                        pageToken=page_token
+                    ).execute()
                     
-                    # If it's a folder, recurse into it
-                    if mime_type == 'application/vnd.google-apps.folder':
-                        subfolder_path = f"{parent_path}/{item_name}" if parent_path else item_name
-                        pdf_files.extend(
-                            self.list_pdf_files_recursive(item_id, subfolder_path)
-                        )
-                    # If it's a PDF file, add it to the list
-                    elif mime_type == 'application/pdf':
-                        pdf_files.append({
-                            'file_id': item_id,
-                            'file_name': item_name,
-                            'folder_path': parent_path if parent_path else '/'
-                        })
-                
-                # Check if there are more pages
-                page_token = results.get('nextPageToken')
-                if not page_token:
+                    for file in response.get('files', []):
+                        if file['mimeType'] == 'application/pdf':
+                            files_list.append({
+                                'file_id': file['id'],
+                                'file_name': file['name'],
+                                'folder_path': current_path
+                            })
+                        elif file['mimeType'] == 'application/vnd.google-apps.folder':
+                            new_path = f"{current_path}/{file['name']}" if current_path else file['name']
+                            _search_folder(file['id'], new_path)
+                    
+                    page_token = response.get('nextPageToken', None)
+                    if not page_token:
+                        break
+                except Exception as e:
+                    logging.error(f"Error searching folder {f_id}: {str(e)}")
                     break
-            
-            return pdf_files
-            
-        except Exception as e:
-            # Log error and return partial results rather than failing completely
-            import logging
-            logging.error(f"Error listing files in folder {folder_id}: {str(e)}")
-            return pdf_files
-    
+        
+        _search_folder(folder_id)
+        return files_list
+
     def download_file(self, file_id: str) -> Optional[bytes]:
         """
-        Download a file from Google Drive.
-        
-        Args:
-            file_id: Google Drive file ID
-            
-        Returns:
-            File content as bytes, or None if download fails
+        Download file content manually using urllib to bypass SSL/Proxy issues.
         """
+        if not self.credentials:
+            self.authenticate()
+            
         try:
-            request = self.service.files().get_media(fileId=file_id)
-            file_buffer = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_buffer, request)
+            # 1. Đảm bảo token còn hạn (Refresh nếu cần)
+            if not self.credentials.valid:
+                self.credentials.refresh(GoogleAuthRequest())
             
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
+            token = self.credentials.token
             
-            file_buffer.seek(0)
-            return file_buffer.read()
+            # 2. Cấu hình request thủ công
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+            headers = {"Authorization": f"Bearer {token}"}
+            req = urllib.request.Request(url, headers=headers)
             
+            # 3. Tạo SSL Context "lỏng lẻo" riêng cho request này
+            # (Giúp vượt qua lỗi WRONG_VERSION_NUMBER mà thư viện chuẩn google hay gặp)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            # 4. Thực hiện tải file
+            with urllib.request.urlopen(req, context=ctx) as response:
+                return response.read()
+                
         except Exception as e:
-            # Log error for debugging but return None to allow processing to continue
-            import logging
             logging.error(f"Error downloading file {file_id}: {str(e)}")
             return None
