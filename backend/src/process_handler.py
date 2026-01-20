@@ -127,13 +127,18 @@ def get_google_drive_service(credentials: Dict[str, str]):
         return None
     
     try:
-        # Create credentials object
+        # Define required scopes for Google Drive API
+        # https://www.googleapis.com/auth/drive.readonly - Read-only access to files and metadata
+        scopes = ['https://www.googleapis.com/auth/drive.readonly']
+        
+        # Create credentials object with required scopes
         creds = Credentials(
             token=credentials['access_token'],
             refresh_token=credentials.get('refresh_token'),
             token_uri='https://oauth2.googleapis.com/token',
             client_id=credentials.get('client_id'),
-            client_secret=credentials.get('client_secret')
+            client_secret=credentials.get('client_secret'),
+            scopes=scopes
         )
         
         # Build the Drive API service
