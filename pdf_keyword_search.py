@@ -317,12 +317,11 @@ class PDFKeywordSearcher:
                 # Prepare result for this keyword
                 if best_match:
                     # Determine Match_Count/Status based on frequency
+                    # max_count is guaranteed to be > 0 here since best_match exists
                     if max_count == 1:
                         status = "1"
-                    elif max_count >= 2:
+                    else:  # max_count >= 2
                         status = f"{max_count}"  # Show actual count for 2+
-                    else:
-                        status = "0"
                     
                     results.append({
                         'ma_ho': keyword,
@@ -406,7 +405,7 @@ class PDFKeywordSearcher:
                     try:
                         if row.value and len(str(row.value)) > max_length:
                             max_length = len(str(row.value))
-                    except:
+                    except (TypeError, AttributeError):
                         pass
                 adjusted_width = min(max_length + 2, 50)
                 result_sheet.column_dimensions[column_letter].width = adjusted_width
