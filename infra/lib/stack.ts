@@ -264,56 +264,34 @@ def handler(event, context):
     // AWS Amplify - Frontend Hosting Configuration
     // ============================================================
 
-    // Create Amplify App for hosting the React frontend
-    // Note: You need to connect your GitHub repository manually in the AWS Console
-    // or provide a GitHub token for automatic deployment
-    const amplifyApp = new amplify.CfnApp(this, "AmplifyApp", {
-      name: "ProcessingFileISOPipingFrontend",
-      description: "Real-time file processing dashboard",
-      repository:
-        "https://github.com/lequockhanh19521680/Processing_file_ISO_Piping",
-      // Note: For automatic deployments, add accessToken property with GitHub personal access token
-      // accessToken: 'your-github-token', // Store this in Secrets Manager and reference it
-      iamServiceRole: this.createAmplifyServiceRole().roleArn,
-      buildSpec: `version: 1
-frontend:
-  phases:
-    preBuild:
-      commands:
-        - cd frontend
-        - npm ci
-    build:
-      commands:
-        - echo "VITE_WEBSOCKET_URL=${webSocketStage.url}" > .env.production
-        - npm run build
-  artifacts:
-    baseDirectory: frontend/dist
-    files:
-      - '**/*'
-  cache:
-    paths:
-      - frontend/node_modules/**/*
-`,
-      environmentVariables: [
-        {
-          name: "VITE_WEBSOCKET_URL",
-          value: webSocketStage.url,
-        },
-      ],
-    });
-
-    // Create Amplify branch for main/master branch
-    const amplifyBranch = new amplify.CfnBranch(this, "AmplifyBranch", {
-      appId: amplifyApp.attrAppId,
-      branchName: "main",
-      enableAutoBuild: true,
-      environmentVariables: [
-        {
-          name: "VITE_WEBSOCKET_URL",
-          value: webSocketStage.url,
-        },
-      ],
-    });
+    // AWS Amplify has been removed from this stack because it requires a GitHub access token
+    // to connect to the repository, which would cause deployment to fail.
+    //
+    // To deploy the frontend, you have several options:
+    //
+    // OPTION 1: Set up AWS Amplify manually in AWS Console
+    //   1. Go to AWS Amplify console
+    //   2. Click "New app" > "Host web app"
+    //   3. Connect your GitHub repository
+    //   4. Configure build settings (use amplify.yml in repo root)
+    //   5. Add environment variable: VITE_WEBSOCKET_URL (get from CDK output)
+    //
+    // OPTION 2: Use S3 + CloudFront for static hosting
+    //   1. Create S3 bucket with static website hosting
+    //   2. Build frontend: cd frontend && npm run build
+    //   3. Upload dist/ folder to S3
+    //   4. Set up CloudFront distribution pointing to S3
+    //
+    // OPTION 3: Local development
+    //   1. cd frontend
+    //   2. Create .env file with: VITE_WEBSOCKET_URL=<your-websocket-url>
+    //   3. npm install
+    //   4. npm run dev
+    //   5. Open http://localhost:3000
+    //
+    // OPTION 4: Deploy to Vercel/Netlify/similar services
+    //   - These services can automatically deploy from GitHub
+    //   - Set VITE_WEBSOCKET_URL environment variable in their dashboard
 
     // Outputs
     new cdk.CfnOutput(this, "WebSocketURL", {
@@ -340,17 +318,9 @@ frontend:
       exportName: "WebSocketUrlParameterName",
     });
 
-    new cdk.CfnOutput(this, "AmplifyAppId", {
-      value: amplifyApp.attrAppId,
-      description: "Amplify App ID",
-      exportName: "AmplifyAppId",
-    });
-
-    new cdk.CfnOutput(this, "AmplifyAppUrl", {
-      value: `https://main.${amplifyApp.attrAppId}.amplifyapp.com`,
-      description: "Amplify App URL",
-      exportName: "AmplifyAppUrl",
-    });
+    // Note: AmplifyAppId and AmplifyAppUrl outputs have been removed
+    // since Amplify resources are not created in this stack.
+    // You can set up Amplify manually in the AWS Console if needed.
 
     new cdk.CfnOutput(this, "WebSocketApiId", {
       value: webSocketApi.apiId,
@@ -371,21 +341,8 @@ frontend:
     });
   }
 
-  /**
-   * Create IAM service role for AWS Amplify
-   * This role allows Amplify to access necessary AWS services
-   */
-  private createAmplifyServiceRole(): iam.Role {
-    const role = new iam.Role(this, "AmplifyServiceRole", {
-      assumedBy: new iam.ServicePrincipal("amplify.amazonaws.com"),
-      description: "Service role for AWS Amplify",
-    });
-
-    // Add permissions for Amplify to access necessary resources
-    role.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName("AdministratorAccess-Amplify"),
-    );
-
-    return role;
-  }
+  // Note: createAmplifyServiceRole() method has been removed since
+  // Amplify resources are not created in this stack.
+  // If you need to add Amplify later, you can recreate this method
+  // or set up the IAM role manually in the AWS Console.
 }
