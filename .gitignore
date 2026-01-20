@@ -67,3 +67,8 @@ uploads/
 output/
 *.xlsx
 !examples/*.xlsx
+
+# Script output files
+debug.log
+test_pdfs/
+test_*.xlsx
