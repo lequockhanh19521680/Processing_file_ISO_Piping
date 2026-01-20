@@ -10,13 +10,12 @@ from openpyxl import Workbook
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from googleapiclient.http import MediaIoBaseDownload
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 # AWS clients
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 secretsmanager_client = boto3.client('secretsmanager')
-textract_client = boto3.client('textract')
 
 # Environment variables
 TABLE_NAME = os.environ.get('TABLE_NAME', '')
@@ -149,32 +148,10 @@ def download_file_from_drive(service, file_id: str) -> bytes:
         return b""
 
 
-def extract_text_with_textract(pdf_bytes: bytes) -> str:
+def extract_text_with_pypdf(pdf_bytes: bytes) -> str:
     """
-    Extract text from PDF using AWS Textract.
-    """
-    try:
-        # Call Textract to analyze document
-        response = textract_client.detect_document_text(
-            Document={'Bytes': pdf_bytes}
-        )
-        
-        # Extract text from all blocks
-        text_lines = []
-        for block in response.get('Blocks', []):
-            if block['BlockType'] == 'LINE':
-                text_lines.append(block.get('Text', ''))
-        
-        return ' '.join(text_lines)
-        
-    except Exception as e:
-        print(f"Error extracting text with Textract: {str(e)}")
-        return ""
-
-
-def extract_text_with_pypdf2(pdf_bytes: bytes) -> str:
-    """
-    Extract text from PDF using PyPDF2 (fallback method).
+    Extract text from PDF using pypdf library.
+    Works with native PDFs that have searchable text.
     """
     try:
         pdf_buffer = io.BytesIO(pdf_bytes)
@@ -189,7 +166,7 @@ def extract_text_with_pypdf2(pdf_bytes: bytes) -> str:
         return ' '.join(text_parts)
         
     except Exception as e:
-        print(f"Error extracting text with PyPDF2: {str(e)}")
+        print(f"Error extracting text with pypdf: {str(e)}")
         return ""
 
 
@@ -219,13 +196,9 @@ def process_single_file(file_id: str, file_name: str, target_hole_codes: List[st
                     print(f"Could not download {file_name}, skipping")
                     found_hole_codes = []
                 else:
-                    # Try Textract first, fall back to PyPDF2
-                    try:
-                        text_content = extract_text_with_textract(pdf_bytes)
-                        print(f"Extracted text with Textract from {file_name}")
-                    except Exception as e:
-                        print(f"Textract failed for {file_name}, using PyPDF2: {str(e)}")
-                        text_content = extract_text_with_pypdf2(pdf_bytes)
+                    # Extract text using pypdf
+                    text_content = extract_text_with_pypdf(pdf_bytes)
+                    print(f"Extracted text with pypdf from {file_name}")
                     
                     # Extract hole codes from text
                     found_hole_codes = extract_hole_codes_from_text(text_content)
