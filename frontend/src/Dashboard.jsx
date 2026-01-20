@@ -100,7 +100,7 @@ const Dashboard = () => {
             if (data.file_name) {
               setLiveScanLog(prevLog => [
                 { 
-                  id: Date.now() + Math.random(), 
+                  id: crypto.randomUUID(), 
                   fileName: data.file_name, 
                   timestamp: new Date().toLocaleTimeString(),
                   status: 'processing'
@@ -127,7 +127,7 @@ const Dashboard = () => {
             // Add to live scan log
             setLiveScanLog(prevLog => [
               { 
-                id: Date.now() + Math.random(), 
+                id: crypto.randomUUID(), 
                 fileName: matchData.file_name || "Unknown", 
                 timestamp: new Date().toLocaleTimeString(),
                 status: 'match_found',
