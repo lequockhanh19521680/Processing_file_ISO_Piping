@@ -110,14 +110,15 @@ The frontend will be available at `http://localhost:3000`
 
 ## Usage
 
-1. **Open the Dashboard**: Navigate to `http://localhost:3000`
+1. **Configure Environment Variables**:
+   - Frontend: Create `.env` file in `frontend/` directory with `VITE_WEBSOCKET_URL`
+   - Backend: Set `GOOGLE_DRIVE_API_KEY` and `GOOGLE_DRIVE_API_TOKEN` in Lambda environment variables
 
-2. **Configure WebSocket**: 
-   - Enter the WebSocket URL from CDK output (e.g., `wss://xxxxx.execute-api.region.amazonaws.com/prod`)
+2. **Open the Dashboard**: Navigate to `http://localhost:3000`
 
-3. **Enter Credentials**:
-   - Google Drive Token (API token for accessing files)
-   - Upload Excel file with target hole codes
+3. **Enter Google Drive Link**:
+   - Paste the Google Drive folder link containing files to process (e.g., `https://drive.google.com/drive/folders/xxxxx`)
+   - Upload Excel file with target hole codes (optional)
 
 4. **Start Processing**:
    - Click "Start Processing"
@@ -128,6 +129,8 @@ The frontend will be available at `http://localhost:3000`
 
 5. **Download Results**:
    - When complete, click "Download Final Excel"
+
+**Note**: WebSocket URL and Google Drive API credentials are now configured via environment variables, not in the UI.
 
 ## WebSocket Message Types
 
@@ -168,11 +171,13 @@ The frontend will be available at `http://localhost:3000`
 ```javascript
 {
   action: 'start_scan',
-  token: 'google_drive_token',
+  drive_link: 'https://drive.google.com/drive/folders/xxxxx',
   file_content: 'excel_data',
   target_hole_codes: ['HOLE-1', 'HOLE-2', ...]
 }
 ```
+
+**Note**: Google Drive API credentials are now configured in backend environment variables.
 
 ## How It Works
 

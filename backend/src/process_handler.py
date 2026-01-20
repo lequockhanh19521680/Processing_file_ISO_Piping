@@ -14,6 +14,8 @@ dynamodb = boto3.resource('dynamodb')
 QUEUE_URL = os.environ.get('QUEUE_URL', '')
 TABLE_NAME = os.environ.get('TABLE_NAME', '')
 WEBSOCKET_API_ENDPOINT = os.environ.get('WEBSOCKET_API_ENDPOINT', '')
+GOOGLE_DRIVE_API_KEY = os.environ.get('GOOGLE_DRIVE_API_KEY', '')
+GOOGLE_DRIVE_API_TOKEN = os.environ.get('GOOGLE_DRIVE_API_TOKEN', '')
 
 
 class WebSocketManager:
@@ -73,11 +75,13 @@ def handler(event, context):
         
         # Extract parameters
         action = body.get('action', '')
-        google_drive_token = body.get('token', '')
+        google_drive_link = body.get('drive_link', '')
         file_content = body.get('file_content', '')
         target_hole_codes = body.get('target_hole_codes', [])
         
         print(f"Action: {action}, Connection: {connection_id}")
+        print(f"Google Drive Link: {google_drive_link}")
+        print(f"Using API credentials from environment variables")
         
         # Generate unique session ID
         session_id = str(uuid.uuid4())
@@ -103,11 +107,14 @@ def handler(event, context):
                 'total_files': total_files,
                 'processed_count': 0,
                 'target_hole_codes': target_hole_codes,
+                'google_drive_link': google_drive_link,
                 'timestamp': datetime.now().isoformat()
             }
         )
         
         # Batch send file metadata to SQS
+        # Note: Google Drive API credentials are accessed from environment variables
+        # GOOGLE_DRIVE_API_KEY and GOOGLE_DRIVE_API_TOKEN for actual implementation
         batch_size = 10
         for batch_start_idx in range(0, len(simulated_files), batch_size):
             batch = simulated_files[batch_start_idx:batch_start_idx + batch_size]
