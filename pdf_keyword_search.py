@@ -21,15 +21,14 @@ import os
 import sys
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 
 import pandas as pd
 import pdfplumber
 from tqdm import tqdm
 import openpyxl
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 
@@ -273,9 +272,6 @@ class PDFKeywordSearcher:
         logger.info(f"Processing {len(self.keywords)} keywords across {len(pdf_files)} PDF files")
         
         results = []
-        
-        # Total number of tasks = keywords * pdf_files
-        total_tasks = len(self.keywords) * len(pdf_files)
         
         # Create a tqdm progress bar
         with tqdm(total=len(self.keywords), 
