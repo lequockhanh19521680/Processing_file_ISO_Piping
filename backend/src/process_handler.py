@@ -15,6 +15,7 @@ import io
 sqs_client = boto3.client('sqs')
 dynamodb = boto3.resource('dynamodb')
 secretsmanager_client = boto3.client('secretsmanager')
+lambda_client = boto3.client('lambda')  # Client để tự gọi lại Lambda
 
 # Environment variables
 QUEUE_URL = os.environ.get('QUEUE_URL', '')
@@ -29,9 +30,6 @@ _secrets_cache = {}
 def get_google_drive_credentials() -> Dict[str, str]:
     """
     Retrieve Google Drive API credentials from AWS Secrets Manager.
-    
-    Returns:
-        Dictionary containing 'access_token' and 'refresh_token'
     """
     global _secrets_cache
     
@@ -69,12 +67,6 @@ def get_google_drive_credentials() -> Dict[str, str]:
 def validate_environment_variables():
     """
     Validate required environment variables at startup.
-    
-    This function checks for required AWS environment variables and prints warnings
-    if they are missing. Google Drive API credentials are optional for simulation mode.
-    
-    Note: This function does not halt execution, it only logs warnings.
-    The application will still start but may not function correctly without required variables.
     """
     required_vars = {
         'QUEUE_URL': QUEUE_URL,
@@ -88,7 +80,6 @@ def validate_environment_variables():
         print(f"Warning: Missing required environment variables: {', '.join(missing)}")
         print("The application may not function correctly without these variables.")
     
-    # Check if Google Drive Secret ARN is configured
     if not GOOGLE_DRIVE_SECRET_ARN:
         print("Info: GOOGLE_DRIVE_SECRET_ARN not set. Using simulation mode for file fetching.")
     else:
@@ -101,9 +92,6 @@ validate_environment_variables()
 def extract_folder_id_from_url(drive_link: str) -> str:
     """
     Extract folder ID from Google Drive URL.
-    Supports formats:
-    - https://drive.google.com/drive/folders/FOLDER_ID
-    - https://drive.google.com/drive/folders/FOLDER_ID?usp=sharing
     """
     patterns = [
         r'folders/([a-zA-Z0-9_-]+)',
@@ -115,7 +103,6 @@ def extract_folder_id_from_url(drive_link: str) -> str:
         if match:
             return match.group(1)
     
-    # If no pattern matches, assume the link itself is the folder ID
     return drive_link.strip()
 
 
@@ -128,10 +115,8 @@ def get_google_drive_service(credentials: Dict[str, str]):
     
     try:
         # Define required scopes for Google Drive API
-        # https://www.googleapis.com/auth/drive.readonly - Read-only access to files and metadata
         scopes = ['https://www.googleapis.com/auth/drive.readonly']
         
-        # Create credentials object with required scopes
         creds = Credentials(
             token=credentials['access_token'],
             refresh_token=credentials.get('refresh_token'),
@@ -141,7 +126,6 @@ def get_google_drive_service(credentials: Dict[str, str]):
             scopes=scopes
         )
         
-        # Build the Drive API service
         service = build('drive', 'v3', credentials=creds)
         return service
     except Exception as e:
@@ -149,16 +133,9 @@ def get_google_drive_service(credentials: Dict[str, str]):
         return None
 
 
-def fetch_files_from_google_drive(service, folder_id: str) -> List[Dict[str, Any]]:
+def fetch_files_from_google_drive_recursive(service, root_folder_id: str) -> List[Dict[str, Any]]:
     """
-    Fetch all PDF files from a Google Drive folder.
-    
-    Args:
-        service: Google Drive API service
-        folder_id: The ID of the folder to fetch files from
-    
-    Returns:
-        List of file metadata dictionaries
+    Fetch all PDF files from a Google Drive folder recursively (searching inside subfolders).
     """
     if not service:
         print("No Google Drive service available, using simulation mode")
@@ -166,26 +143,41 @@ def fetch_files_from_google_drive(service, folder_id: str) -> List[Dict[str, Any
     
     try:
         files_list = []
-        page_token = None
+        # Queue for folders to search, starting with root
+        folders_to_search = [root_folder_id]
         
-        while True:
-            # Query for PDF files in the folder
-            query = f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false"
-            results = service.files().list(
-                q=query,
-                pageSize=100,
-                fields="nextPageToken, files(id, name, webViewLink)",
-                pageToken=page_token
-            ).execute()
+        print(f"Starting recursive scan from root folder: {root_folder_id}")
+
+        while folders_to_search:
+            current_folder_id = folders_to_search.pop(0)
+            page_token = None
             
-            items = results.get('files', [])
-            files_list.extend(items)
-            
-            page_token = results.get('nextPageToken')
-            if not page_token:
-                break
+            while True:
+                # Query for both PDFs and sub-folders
+                query = f"'{current_folder_id}' in parents and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.folder') and trashed=false"
+                
+                results = service.files().list(
+                    q=query,
+                    pageSize=1000,
+                    fields="nextPageToken, files(id, name, webViewLink, mimeType)",
+                    pageToken=page_token
+                ).execute()
+                
+                items = results.get('files', [])
+                
+                for item in items:
+                    if item.get('mimeType') == 'application/vnd.google-apps.folder':
+                        # Add sub-folder to queue
+                        folders_to_search.append(item['id'])
+                    else:
+                        # Add PDF file to results
+                        files_list.append(item)
+                
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
         
-        print(f"Found {len(files_list)} PDF files in Google Drive folder")
+        print(f"Found total {len(files_list)} PDF files in Google Drive folder structure")
         return files_list
         
     except Exception as e:
@@ -197,7 +189,6 @@ def fetch_files_from_google_drive(service, folder_id: str) -> List[Dict[str, Any
 def download_file_content(service, file_id: str) -> str:
     """
     Download file content from Google Drive.
-    Returns file content as string (for text extraction).
     """
     if not service:
         return ""
@@ -211,7 +202,6 @@ def download_file_content(service, file_id: str) -> str:
         while not done:
             status, done = downloader.next_chunk()
         
-        # Return the content as bytes (will be processed by Textract later)
         file_buffer.seek(0)
         return file_buffer.read()
         
@@ -220,17 +210,10 @@ def download_file_content(service, file_id: str) -> str:
         return ""
 
 
-# Validate environment on module load
-validate_environment_variables()
-
-
 class WebSocketManager:
     """Manage WebSocket connections and send updates to clients"""
     
     def __init__(self, endpoint_url: str, connection_id: str):
-        # Extract the API Gateway endpoint from WebSocket URL
-        # Format: wss://xxxxx.execute-api.region.amazonaws.com/prod
-        # We need: https://xxxxx.execute-api.region.amazonaws.com/prod
         if endpoint_url.startswith('wss://'):
             endpoint_url = endpoint_url.replace('wss://', 'https://')
         
@@ -255,61 +238,55 @@ class WebSocketManager:
             return False
 
 
-def handler(event, context):
-    """Dispatcher Lambda handler - sends files to SQS for processing"""
-    print(f"Received event: {json.dumps(event)}")
-    
+def perform_scan_logic(event):
+    """
+    BACKGROUND TASK: Performs the heavy lifting of scanning files and sending to SQS.
+    This runs asynchronously to avoid API Gateway timeout.
+    """
     try:
-        # Extract connection ID from WebSocket event
-        request_context = event.get('requestContext', {})
-        connection_id = request_context.get('connectionId')
+        # Extract parameters passed from the main handler
+        body = event.get('body_payload', {})
+        connection_id = event.get('connection_id')
         
         if not connection_id:
-            print("No connection ID found in event")
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'No connection ID'})
-            }
-        
+            print("Error: No connection ID provided for async scan")
+            return
+
         # Initialize WebSocket manager
         ws_manager = WebSocketManager(WEBSOCKET_API_ENDPOINT, connection_id)
         
-        # Parse the body of the WebSocket message
-        body = event.get('body', '{}')
-        if isinstance(body, str):
-            body = json.loads(body)
-        
-        # Extract parameters
-        action = body.get('action', '')
+        # Extract user parameters
         google_drive_link = body.get('drive_link', '')
         target_hole_codes = body.get('target_hole_codes', [])
         
-        print(f"Action: {action}, Connection: {connection_id}")
-        print(f"Received Google Drive link for processing: {google_drive_link}")
+        print(f"Async scan started for Connection: {connection_id}")
+        print(f"Processing Google Drive link: {google_drive_link}")
         
-        # Retrieve Google Drive credentials from Secrets Manager
+        # Retrieve credentials
         credentials = get_google_drive_credentials()
         
         # Generate unique session ID
         session_id = str(uuid.uuid4())
         
-        # Try to fetch files from Google Drive
         files_list = []
         use_simulation = False
         
+        # 1. Fetch files from Google Drive (Recursive)
         if credentials.get('access_token'):
-            # Real Google Drive integration
             try:
                 folder_id = extract_folder_id_from_url(google_drive_link)
                 print(f"Extracted folder ID: {folder_id}")
                 
                 service = get_google_drive_service(credentials)
                 if service:
-                    files_list = fetch_files_from_google_drive(service, folder_id)
+                    # USE RECURSIVE FETCH HERE
+                    files_list = fetch_files_from_google_drive_recursive(service, folder_id)
                     
                     if not files_list:
-                        print("No files found in Google Drive folder, falling back to simulation")
-                        use_simulation = True
+                        print("No files found in Google Drive folder structure")
+                        # Optional: fall back to simulation if strictly required, 
+                        # or just return 0 files. Here we flag for simulation if desired.
+                        # use_simulation = True 
                 else:
                     print("Could not create Google Drive service, falling back to simulation")
                     use_simulation = True
@@ -322,7 +299,7 @@ def handler(event, context):
             use_simulation = True
         
         # Fallback to simulation if needed
-        if use_simulation or not files_list:
+        if use_simulation or (not files_list and not credentials.get('access_token')):
             print("Using simulated file list")
             total_files = 100
             files_list = [
@@ -336,7 +313,7 @@ def handler(event, context):
         
         total_files = len(files_list)
         
-        # Store session metadata in DynamoDB
+        # 2. Store session metadata in DynamoDB
         table = dynamodb.Table(TABLE_NAME)
         table.put_item(
             Item={
@@ -351,15 +328,13 @@ def handler(event, context):
             }
         )
         
-        # Batch send file metadata to SQS
-        # Files are now fetched from Google Drive API
+        # 3. Batch send file metadata to SQS
         batch_size = 10
         for batch_start_idx in range(0, len(files_list), batch_size):
             batch = files_list[batch_start_idx:batch_start_idx + batch_size]
             entries = []
             
             for idx, file_data in enumerate(batch):
-                # For real Google Drive files
                 file_id = file_data.get('id', '')
                 file_name = file_data.get('name', '')
                 pdf_link = file_data.get('webViewLink', '')
@@ -377,26 +352,104 @@ def handler(event, context):
                 })
             
             # Send batch to SQS
-            sqs_client.send_message_batch(
-                QueueUrl=QUEUE_URL,
-                Entries=entries
-            )
+            if entries:
+                sqs_client.send_message_batch(
+                    QueueUrl=QUEUE_URL,
+                    Entries=entries
+                )
         
         print(f"Dispatched {total_files} files to SQS for session {session_id}")
         
-        # Send STARTED message
+        # 4. Notify Client via WebSocket
         ws_manager.send_update({
             'type': 'STARTED',
-            'message': 'Processing started',
+            'message': f'Scanning completed. Found {total_files} files. Processing started.',
             'session_id': session_id,
+            'total_files': total_files,
             'timestamp': datetime.now().isoformat()
         })
         
+    except Exception as e:
+        error_message = f"Error in async scan logic: {str(e)}"
+        print(error_message)
+        traceback.print_exc()
+        
+        # Try to send error to client
+        try:
+            if 'ws_manager' in locals():
+                ws_manager.send_update({
+                    'type': 'ERROR',
+                    'message': error_message
+                })
+        except:
+            pass
+
+
+def handler(event, context):
+    """
+    Main Lambda Handler (Dispatcher).
+    Handles two types of events:
+    1. WebSocket requests (via API Gateway) -> Triggers Async Invocation
+    2. Async Invocations (Self-triggered) -> Executes perform_scan_logic
+    """
+    print(f"Received event: {json.dumps(event)}")
+    
+    # --- CASE 1: Async Execution (Self-triggered) ---
+    if event.get('is_async_scan'):
+        print("Executing async scan logic...")
+        perform_scan_logic(event)
+        return {
+            'statusCode': 200,
+            'body': json.dumps({'message': 'Async scan completed'})
+        }
+
+    # --- CASE 2: WebSocket Request (API Gateway) ---
+    try:
+        request_context = event.get('requestContext', {})
+        connection_id = request_context.get('connectionId')
+        
+        if not connection_id:
+            print("No connection ID found in event")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'No connection ID'})
+            }
+        
+        # Parse body
+        body = event.get('body', '{}')
+        if isinstance(body, str):
+            body = json.loads(body)
+            
+        action = body.get('action', '')
+        
+        # Validate action
+        if action != 'start_scan':
+             return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Invalid action'})
+            }
+            
+        print(f"Received scan request for Connection: {connection_id}. Invoking async worker.")
+
+        # Invoke self asynchronously
+        # This returns immediately so API Gateway doesn't timeout
+        lambda_client.invoke(
+            FunctionName=context.function_name,
+            InvocationType='Event',  # 'Event' = Async
+            Payload=json.dumps({
+                'is_async_scan': True,
+                'body_payload': body,
+                'connection_id': connection_id,
+                'requestContext': request_context # Pass context if needed
+            })
+        )
+        
+        # Return success immediately to the client
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': 'Processing started',
-                'session_id': session_id
+                'message': 'Scan request accepted. Processing in background.',
+                'status': 'ACCEPTED'
             })
         }
         
@@ -404,17 +457,6 @@ def handler(event, context):
         error_message = f"Error in dispatcher: {str(e)}"
         print(error_message)
         traceback.print_exc()
-        
-        # Try to send error message via WebSocket if possible
-        try:
-            if connection_id and WEBSOCKET_API_ENDPOINT:
-                ws_manager = WebSocketManager(WEBSOCKET_API_ENDPOINT, connection_id)
-                ws_manager.send_update({
-                    'type': 'ERROR',
-                    'message': error_message
-                })
-        except:
-            pass
         
         return {
             'statusCode': 500,

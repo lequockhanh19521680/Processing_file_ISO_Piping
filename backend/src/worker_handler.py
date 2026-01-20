@@ -327,7 +327,7 @@ def handler(event, context):
             
             meta = response['Attributes']
             connection_id = meta.get('connection_id')
-            total_files = meta.get('total_files')
+            total_files = int(meta.get('total_files', 0)) 
             processed_count = int(meta.get('processed_count', 0))
             
             # Send progress update via WebSocket
