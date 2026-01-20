@@ -21,6 +21,8 @@ const Dashboard = () => {
   const [results, setResults] = useState([]);
   const [downloadUrl, setDownloadUrl] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [liveScanLog, setLiveScanLog] = useState([]);
+  const [validationError, setValidationError] = useState("");
 
   // WebSocket connection
   const { sendMessage, lastMessage, readyState } = useWebSocket(
@@ -29,6 +31,12 @@ const Dashboard = () => {
       shouldReconnect: () => true,
       reconnectAttempts: 10,
       reconnectInterval: 3000,
+      heartbeat: {
+        message: JSON.stringify({ action: 'ping' }),
+        returnMessage: 'pong',
+        timeout: 60000,
+        interval: 25000,
+      },
     },
     shouldConnect,
   );
@@ -64,15 +72,42 @@ const Dashboard = () => {
             setProgress(0);
             setResults([]);
             setDownloadUrl("");
+            setLiveScanLog([]);
+            setValidationError("");
+            // Set total files from STARTED event
+            if (data.total_files) {
+              setTotalFiles(data.total_files);
+              setProcessedFiles(0);
+            }
             break;
 
           case "PROGRESS":
-            setProgress(data.value || 0);
-            setProcessedFiles(data.processed || 0);
-            setTotalFiles(data.total || 0);
+            // Update progress ensuring it never goes backward
+            const newProgress = data.value || 0;
+            setProgress(prevProgress => Math.max(prevProgress, newProgress));
+            
+            const newProcessed = data.processed || 0;
+            const newTotal = data.total || 0;
+            
+            setProcessedFiles(prevProcessed => Math.max(prevProcessed, newProcessed));
+            setTotalFiles(prevTotal => Math.max(prevTotal, newTotal));
+            
             setStatusMessage(
-              `Processing: ${data.processed || 0}/${data.total || 0} files`,
+              `Processing: ${newProcessed}/${newTotal} files`,
             );
+            
+            // Add to live scan log (show last file being processed)
+            if (data.file_name) {
+              setLiveScanLog(prevLog => [
+                { 
+                  id: crypto.randomUUID(), 
+                  fileName: data.file_name, 
+                  timestamp: new Date().toLocaleTimeString(),
+                  status: 'processing'
+                },
+                ...prevLog.slice(0, 49) // Keep last 50 entries
+              ]);
+            }
             break;
 
           case "MATCH_FOUND":
@@ -88,13 +123,25 @@ const Dashboard = () => {
                 pdfLink: matchData.pdf_link || "",
               },
             ]);
+            
+            // Add to live scan log
+            setLiveScanLog(prevLog => [
+              { 
+                id: crypto.randomUUID(), 
+                fileName: matchData.file_name || "Unknown", 
+                timestamp: new Date().toLocaleTimeString(),
+                status: 'match_found',
+                holeCode: matchData.hole_code
+              },
+              ...prevLog.slice(0, 49) // Keep last 50 entries
+            ]);
             break;
 
           case "COMPLETE":
             setProgress(100);
             setIsProcessing(false);
             setDownloadUrl(data.download_url || "");
-            setStatusMessage(data.message || "Processing completed!");
+            setStatusMessage(data.message || "Processing completed successfully!");
             break;
 
           case "ERROR":
@@ -152,15 +199,39 @@ const Dashboard = () => {
 
   // Start processing
   const handleStartProcessing = () => {
+    // Clear previous validation error
+    setValidationError("");
+    
     if (!websocketUrl) {
-      alert(
+      setValidationError(
         "WebSocket URL is not configured. Please set VITE_WEBSOCKET_URL in your .env file.",
       );
       return;
     }
 
+    // Validate Google Drive URL
     if (!googleDriveLink) {
-      alert("Please enter Google Drive Link");
+      setValidationError("Please enter a Google Drive Link");
+      return;
+    }
+    
+    // Validate that the URL is actually a Google Drive URL
+    try {
+      const url = new URL(googleDriveLink);
+      // Only allow exact match or subdomains of drive.google.com
+      const hostname = url.hostname.toLowerCase();
+      if (hostname !== 'drive.google.com' && !hostname.endsWith('.drive.google.com')) {
+        setValidationError("Please enter a valid Google Drive URL (must be from drive.google.com)");
+        return;
+      }
+    } catch (e) {
+      setValidationError("Please enter a valid URL");
+      return;
+    }
+
+    // Validate Excel file has been uploaded and processed
+    if (!excelFile || targetHoleCodes.length === 0) {
+      setValidationError("Please upload an Excel file with target hole codes");
       return;
     }
 
@@ -174,7 +245,7 @@ const Dashboard = () => {
     } else if (readyState === ReadyState.OPEN) {
       sendProcessingRequest();
     } else {
-      alert("WebSocket is not connected. Please wait...");
+      setValidationError("WebSocket is not connected. Please wait...");
     }
   };
 
@@ -218,6 +289,11 @@ const Dashboard = () => {
               <span className="text-sm text-gray-600">{statusMessage}</span>
             )}
           </div>
+          {validationError && (
+            <div className="mt-3 p-3 bg-red-100 border border-red-400 text-red-700 rounded-md text-sm">
+              {validationError}
+            </div>
+          )}
         </div>
 
         {/* Control Panel */}
@@ -269,9 +345,35 @@ const Dashboard = () => {
             <button
               onClick={handleStartProcessing}
               disabled={isProcessing || !googleDriveLink || !websocketUrl}
-              className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center"
             >
-              {isProcessing ? "Processing..." : "Start Processing"}
+              {isProcessing ? (
+                <>
+                  <svg
+                    className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  Scanning...
+                </>
+              ) : (
+                "Start Scan"
+              )}
             </button>
 
             {downloadUrl && (
@@ -314,6 +416,115 @@ const Dashboard = () => {
                 style={{ width: `${progress}%` }}
               >
                 <div className="h-full w-full bg-blue-400 opacity-50 animate-pulse"></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Live Scan Log */}
+        {(isProcessing || liveScanLog.length > 0) && (
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">
+              Live Scan Log {liveScanLog.length > 0 && `(${liveScanLog.length} entries)`}
+            </h2>
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md">
+              {liveScanLog.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  Waiting for files to be processed...
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {liveScanLog.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`px-4 py-2 hover:bg-gray-50 text-sm ${
+                        entry.status === 'match_found' 
+                          ? 'bg-green-50 border-l-4 border-green-500' 
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900 truncate">
+                            {entry.fileName}
+                          </p>
+                          {entry.holeCode && (
+                            <p className="text-xs text-green-600 mt-1">
+                              Match: {entry.holeCode}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center ml-4 space-x-2">
+                          {entry.status === 'match_found' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                              Match
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-500 whitespace-nowrap">
+                            {entry.timestamp}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Showing real-time file processing activity. Latest entries appear at the top.
+            </p>
+          </div>
+        )}
+
+        {/* Completion Message */}
+        {!isProcessing && downloadUrl && (
+          <div className="bg-green-50 border-l-4 border-green-500 rounded-lg shadow-md p-6 mb-6">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg
+                  className="h-8 w-8 text-green-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              </div>
+              <div className="ml-4 flex-1">
+                <h3 className="text-lg font-semibold text-green-800">
+                  Processing Complete!
+                </h3>
+                <p className="mt-1 text-sm text-green-700">
+                  Successfully processed {totalFiles} files and found {results.length} matches.
+                  Your report is ready for download.
+                </p>
+              </div>
+              <div className="ml-4">
+                <a
+                  href={downloadUrl}
+                  download
+                  className="inline-flex items-center px-4 py-2 bg-green-600 text-white font-medium rounded-md hover:bg-green-700 transition-colors"
+                >
+                  <svg
+                    className="w-5 h-5 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                    />
+                  </svg>
+                  Download Report
+                </a>
               </div>
             </div>
           </div>
