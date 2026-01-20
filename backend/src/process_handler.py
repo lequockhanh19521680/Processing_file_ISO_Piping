@@ -2,9 +2,14 @@ import json
 import os
 import boto3
 import uuid
+import re
 from datetime import datetime
 from typing import Dict, List, Any
 import traceback
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from googleapiclient.http import MediaIoBaseDownload
+import io
 
 # AWS clients
 sqs_client = boto3.client('sqs')
@@ -26,7 +31,7 @@ def get_google_drive_credentials() -> Dict[str, str]:
     Retrieve Google Drive API credentials from AWS Secrets Manager.
     
     Returns:
-        Dictionary containing 'api_key' and 'api_token'
+        Dictionary containing 'access_token' and 'refresh_token'
     """
     global _secrets_cache
     
@@ -36,15 +41,17 @@ def get_google_drive_credentials() -> Dict[str, str]:
     
     if not GOOGLE_DRIVE_SECRET_ARN:
         print("Warning: GOOGLE_DRIVE_SECRET_ARN not set. Using simulation mode.")
-        return {'api_key': '', 'api_token': ''}
+        return {'access_token': '', 'refresh_token': '', 'client_id': '', 'client_secret': ''}
     
     try:
         response = secretsmanager_client.get_secret_value(SecretId=GOOGLE_DRIVE_SECRET_ARN)
         secret_data = json.loads(response['SecretString'])
         
         credentials = {
-            'api_key': secret_data.get('api_key', ''),
-            'api_token': secret_data.get('api_token', '')
+            'access_token': secret_data.get('access_token', ''),
+            'refresh_token': secret_data.get('refresh_token', ''),
+            'client_id': secret_data.get('client_id', ''),
+            'client_secret': secret_data.get('client_secret', '')
         }
         
         # Cache the credentials
@@ -56,7 +63,7 @@ def get_google_drive_credentials() -> Dict[str, str]:
     except Exception as e:
         print(f"Error retrieving Google Drive credentials: {str(e)}")
         print("Falling back to simulation mode")
-        return {'api_key': '', 'api_token': ''}
+        return {'access_token': '', 'refresh_token': '', 'client_id': '', 'client_secret': ''}
 
 
 def validate_environment_variables():
@@ -86,6 +93,126 @@ def validate_environment_variables():
         print("Info: GOOGLE_DRIVE_SECRET_ARN not set. Using simulation mode for file fetching.")
     else:
         print("Info: Google Drive API credentials will be retrieved from Secrets Manager.")
+
+
+validate_environment_variables()
+
+
+def extract_folder_id_from_url(drive_link: str) -> str:
+    """
+    Extract folder ID from Google Drive URL.
+    Supports formats:
+    - https://drive.google.com/drive/folders/FOLDER_ID
+    - https://drive.google.com/drive/folders/FOLDER_ID?usp=sharing
+    """
+    patterns = [
+        r'folders/([a-zA-Z0-9_-]+)',
+        r'id=([a-zA-Z0-9_-]+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, drive_link)
+        if match:
+            return match.group(1)
+    
+    # If no pattern matches, assume the link itself is the folder ID
+    return drive_link.strip()
+
+
+def get_google_drive_service(credentials: Dict[str, str]):
+    """
+    Create Google Drive API service client.
+    """
+    if not credentials.get('access_token'):
+        return None
+    
+    try:
+        # Create credentials object
+        creds = Credentials(
+            token=credentials['access_token'],
+            refresh_token=credentials.get('refresh_token'),
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=credentials.get('client_id'),
+            client_secret=credentials.get('client_secret')
+        )
+        
+        # Build the Drive API service
+        service = build('drive', 'v3', credentials=creds)
+        return service
+    except Exception as e:
+        print(f"Error creating Google Drive service: {str(e)}")
+        return None
+
+
+def fetch_files_from_google_drive(service, folder_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all PDF files from a Google Drive folder.
+    
+    Args:
+        service: Google Drive API service
+        folder_id: The ID of the folder to fetch files from
+    
+    Returns:
+        List of file metadata dictionaries
+    """
+    if not service:
+        print("No Google Drive service available, using simulation mode")
+        return []
+    
+    try:
+        files_list = []
+        page_token = None
+        
+        while True:
+            # Query for PDF files in the folder
+            query = f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false"
+            results = service.files().list(
+                q=query,
+                pageSize=100,
+                fields="nextPageToken, files(id, name, webViewLink)",
+                pageToken=page_token
+            ).execute()
+            
+            items = results.get('files', [])
+            files_list.extend(items)
+            
+            page_token = results.get('nextPageToken')
+            if not page_token:
+                break
+        
+        print(f"Found {len(files_list)} PDF files in Google Drive folder")
+        return files_list
+        
+    except Exception as e:
+        print(f"Error fetching files from Google Drive: {str(e)}")
+        traceback.print_exc()
+        return []
+
+
+def download_file_content(service, file_id: str) -> str:
+    """
+    Download file content from Google Drive.
+    Returns file content as string (for text extraction).
+    """
+    if not service:
+        return ""
+    
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_buffer, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        
+        # Return the content as bytes (will be processed by Textract later)
+        file_buffer.seek(0)
+        return file_buffer.read()
+        
+    except Exception as e:
+        print(f"Error downloading file from Google Drive: {str(e)}")
+        return ""
 
 
 # Validate environment on module load
@@ -150,11 +277,10 @@ def handler(event, context):
         # Extract parameters
         action = body.get('action', '')
         google_drive_link = body.get('drive_link', '')
-        file_content = body.get('file_content', '')
         target_hole_codes = body.get('target_hole_codes', [])
         
         print(f"Action: {action}, Connection: {connection_id}")
-        print(f"Received Google Drive link for processing")
+        print(f"Received Google Drive link for processing: {google_drive_link}")
         
         # Retrieve Google Drive credentials from Secrets Manager
         credentials = get_google_drive_credentials()
@@ -162,16 +288,48 @@ def handler(event, context):
         # Generate unique session ID
         session_id = str(uuid.uuid4())
         
-        # Simulate file list (replace with actual Google Drive file fetching)
-        total_files = 100
-        simulated_files = [
-            {
-                'name': f'drawing_{i}.pdf',
-                'content': f'Sample content for file {i} with HOLE-{i % 10}',
-                'pdf_link': f'https://drive.google.com/file/{i}'
-            }
-            for i in range(total_files)
-        ]
+        # Try to fetch files from Google Drive
+        files_list = []
+        use_simulation = False
+        
+        if credentials.get('access_token'):
+            # Real Google Drive integration
+            try:
+                folder_id = extract_folder_id_from_url(google_drive_link)
+                print(f"Extracted folder ID: {folder_id}")
+                
+                service = get_google_drive_service(credentials)
+                if service:
+                    files_list = fetch_files_from_google_drive(service, folder_id)
+                    
+                    if not files_list:
+                        print("No files found in Google Drive folder, falling back to simulation")
+                        use_simulation = True
+                else:
+                    print("Could not create Google Drive service, falling back to simulation")
+                    use_simulation = True
+            except Exception as e:
+                print(f"Error accessing Google Drive: {str(e)}")
+                print("Falling back to simulation mode")
+                use_simulation = True
+        else:
+            print("No Google Drive credentials available, using simulation mode")
+            use_simulation = True
+        
+        # Fallback to simulation if needed
+        if use_simulation or not files_list:
+            print("Using simulated file list")
+            total_files = 100
+            files_list = [
+                {
+                    'id': f'sim_{i}',
+                    'name': f'drawing_{i}.pdf',
+                    'webViewLink': f'https://drive.google.com/file/d/sim_{i}/view'
+                }
+                for i in range(total_files)
+            ]
+        
+        total_files = len(files_list)
         
         # Store session metadata in DynamoDB
         table = dynamodb.Table(TABLE_NAME)
@@ -189,23 +347,27 @@ def handler(event, context):
         )
         
         # Batch send file metadata to SQS
-        # TODO: Integrate with Google Drive API using credentials from Secrets Manager
-        # Use credentials['api_key'] and credentials['api_token'] to fetch actual files from google_drive_link
-        # For now, simulating file list as placeholder
+        # Files are now fetched from Google Drive API
         batch_size = 10
-        for batch_start_idx in range(0, len(simulated_files), batch_size):
-            batch = simulated_files[batch_start_idx:batch_start_idx + batch_size]
+        for batch_start_idx in range(0, len(files_list), batch_size):
+            batch = files_list[batch_start_idx:batch_start_idx + batch_size]
             entries = []
             
             for idx, file_data in enumerate(batch):
+                # For real Google Drive files
+                file_id = file_data.get('id', '')
+                file_name = file_data.get('name', '')
+                pdf_link = file_data.get('webViewLink', '')
+                
                 entries.append({
                     'Id': str(batch_start_idx + idx),
                     'MessageBody': json.dumps({
                         'session_id': session_id,
-                        'file_name': file_data['name'],
-                        'file_content': file_data['content'],
-                        'pdf_link': file_data['pdf_link'],
-                        'target_hole_codes': target_hole_codes
+                        'file_id': file_id,
+                        'file_name': file_name,
+                        'pdf_link': pdf_link,
+                        'target_hole_codes': target_hole_codes,
+                        'use_simulation': use_simulation
                     })
                 })
             

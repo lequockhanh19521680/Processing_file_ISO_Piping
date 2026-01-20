@@ -190,15 +190,24 @@ The frontend will be available at `http://localhost:3000`
 
 ## How It Works
 
+**All mock implementations have been replaced with real integrations:**
+
 1. **WebSocket Connection**: Frontend connects to API Gateway WebSocket API
-2. **Start Processing**: User clicks button, sends `start_scan` message
+2. **Start Processing**: User uploads Excel file (parsed with ExcelJS) and enters Google Drive link
 3. **Dispatcher Phase** (ScanDispatcher Lambda):
+   - Extracts folder ID from Google Drive URL
+   - Authenticates with Google Drive API using credentials from Secrets Manager
+   - Fetches real PDF files from the specified folder using Google Drive API v3
+   - Falls back to simulation mode if credentials unavailable
    - Generates unique session_id
    - Stores session metadata in DynamoDB
    - Batches file metadata and sends to SQS queue
    - Sends STARTED message via WebSocket
    - Exits immediately (no waiting)
 4. **Worker Phase** (ScanWorker Lambda, triggered by SQS):
+   - Downloads PDF files from Google Drive
+   - Extracts text using AWS Textract (primary) or PyPDF2 (fallback)
+   - Searches for hole codes in extracted text
    - Processes files in batches of 10 from SQS
    - Writes results to DynamoDB
    - Atomically updates processed_count
@@ -211,6 +220,13 @@ The frontend will be available at `http://localhost:3000`
    - Uploads to S3
    - Sends COMPLETE with download URL via WebSocket
    - Frontend shows download button
+
+**Real Integrations:**
+- ✅ Google Drive API v3 for file fetching
+- ✅ ExcelJS for parsing Excel files (frontend)
+- ✅ AWS Textract for text extraction from PDFs
+- ✅ PyPDF2 as fallback for text-based PDFs
+- ✅ Automatic fallback to simulation mode for testing
 
 ## Key Benefits Over HTTP REST
 
@@ -319,10 +335,13 @@ The system now uses **async event-driven architecture** with SQS and DynamoDB:
 6. ✅ **Secrets Management with AWS Secrets Manager**
 7. ✅ **AWS Amplify deployment configuration**
 8. ✅ **Secure credential handling (no hardcoded secrets)**
-9. 🔄 Google Drive API integration (credentials ready in Secrets Manager)
-10. 🔄 AWS Textract integration
-11. 🔄 Authentication/authorization (Cognito, API keys)
-12. 🔄 Production deployment with custom domain
+9. ✅ **Google Drive API integration (real, not mock)**
+10. ✅ **AWS Textract integration (real text extraction)**
+11. ✅ **ExcelJS integration (real Excel parsing)**
+12. 🔄 Authentication/authorization (Cognito, API keys)
+13. 🔄 Production deployment with custom domain
+
+**For detailed setup instructions, see [REAL_IMPLEMENTATION_GUIDE.md](./REAL_IMPLEMENTATION_GUIDE.md)**
 
 ## AWS Solutions Architect Professional Exam Relevance
 

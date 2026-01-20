@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import useWebSocket, { ReadyState } from "react-use-websocket";
+import * as ExcelJS from "exceljs";
 
 const Dashboard = () => {
   // WebSocket configuration from environment variable with fallback
@@ -115,9 +116,37 @@ const Dashboard = () => {
     const file = event.target.files?.[0];
     if (file) {
       setExcelFile(file);
-      // Parse Excel file to extract target hole codes (simplified)
-      // In real implementation, use a library like xlsx to parse
-      setTargetHoleCodes(["HOLE-1", "HOLE-2", "HOLE-3", "HOLE-5", "HOLE-7"]);
+      
+      try {
+        // Parse Excel file to extract target hole codes
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(arrayBuffer);
+        
+        // Assume first worksheet contains hole codes in the first column
+        const worksheet = workbook.worksheets[0];
+        const holeCodes = [];
+        
+        worksheet.eachRow((row, rowNumber) => {
+          // Skip header row
+          if (rowNumber > 1) {
+            const cellValue = row.getCell(1).value;
+            if (cellValue) {
+              // Convert to string and trim
+              const holeCode = String(cellValue).trim();
+              if (holeCode) {
+                holeCodes.push(holeCode);
+              }
+            }
+          }
+        });
+        
+        setTargetHoleCodes(holeCodes);
+        console.log(`Extracted ${holeCodes.length} hole codes from Excel file`);
+      } catch (error) {
+        console.error("Error parsing Excel file:", error);
+        alert("Failed to parse Excel file. Please ensure it's a valid Excel file with hole codes in the first column.");
+      }
     }
   };
 
@@ -153,7 +182,6 @@ const Dashboard = () => {
     const message = {
       action: "start_scan",
       drive_link: googleDriveLink,
-      file_content: excelFile ? "file_data_here" : "",
       target_hole_codes: targetHoleCodes,
     };
 
