@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import * as cdk from 'aws-cdk-lib';
-import { ProcessingFileISOPipingStack } from '../lib/stack';
+import * as cdk from "aws-cdk-lib";
+import { ProcessingFileISOPipingStack } from "../lib/stack";
 
 const app = new cdk.App();
-new ProcessingFileISOPipingStack(app, 'ProcessingFileISOPipingStack', {
+new ProcessingFileISOPipingStack(app, "ProcessingFileISOPipingStack", {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
