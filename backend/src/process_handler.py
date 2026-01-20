@@ -9,13 +9,54 @@ import traceback
 # AWS clients
 sqs_client = boto3.client('sqs')
 dynamodb = boto3.resource('dynamodb')
+secretsmanager_client = boto3.client('secretsmanager')
 
 # Environment variables
 QUEUE_URL = os.environ.get('QUEUE_URL', '')
 TABLE_NAME = os.environ.get('TABLE_NAME', '')
 WEBSOCKET_API_ENDPOINT = os.environ.get('WEBSOCKET_API_ENDPOINT', '')
-GOOGLE_DRIVE_API_KEY = os.environ.get('GOOGLE_DRIVE_API_KEY', '')
-GOOGLE_DRIVE_API_TOKEN = os.environ.get('GOOGLE_DRIVE_API_TOKEN', '')
+GOOGLE_DRIVE_SECRET_ARN = os.environ.get('GOOGLE_DRIVE_SECRET_ARN', '')
+
+# Cache for secrets to avoid repeated API calls
+_secrets_cache = {}
+
+
+def get_google_drive_credentials() -> Dict[str, str]:
+    """
+    Retrieve Google Drive API credentials from AWS Secrets Manager.
+    
+    Returns:
+        Dictionary containing 'api_key' and 'api_token'
+    """
+    global _secrets_cache
+    
+    # Return cached credentials if available
+    if 'google_drive' in _secrets_cache:
+        return _secrets_cache['google_drive']
+    
+    if not GOOGLE_DRIVE_SECRET_ARN:
+        print("Warning: GOOGLE_DRIVE_SECRET_ARN not set. Using simulation mode.")
+        return {'api_key': '', 'api_token': ''}
+    
+    try:
+        response = secretsmanager_client.get_secret_value(SecretId=GOOGLE_DRIVE_SECRET_ARN)
+        secret_data = json.loads(response['SecretString'])
+        
+        credentials = {
+            'api_key': secret_data.get('api_key', ''),
+            'api_token': secret_data.get('api_token', '')
+        }
+        
+        # Cache the credentials
+        _secrets_cache['google_drive'] = credentials
+        
+        print("Successfully retrieved Google Drive credentials from Secrets Manager")
+        return credentials
+        
+    except Exception as e:
+        print(f"Error retrieving Google Drive credentials: {str(e)}")
+        print("Falling back to simulation mode")
+        return {'api_key': '', 'api_token': ''}
 
 
 def validate_environment_variables():
@@ -40,11 +81,11 @@ def validate_environment_variables():
         print(f"Warning: Missing required environment variables: {', '.join(missing)}")
         print("The application may not function correctly without these variables.")
     
-    # Google Drive API credentials are optional for simulation mode
-    if not GOOGLE_DRIVE_API_KEY or not GOOGLE_DRIVE_API_TOKEN:
-        print("Info: Google Drive API credentials not set. Using simulation mode for file fetching.")
+    # Check if Google Drive Secret ARN is configured
+    if not GOOGLE_DRIVE_SECRET_ARN:
+        print("Info: GOOGLE_DRIVE_SECRET_ARN not set. Using simulation mode for file fetching.")
     else:
-        print("Info: Google Drive API credentials configured.")
+        print("Info: Google Drive API credentials will be retrieved from Secrets Manager.")
 
 
 # Validate environment on module load
@@ -115,6 +156,9 @@ def handler(event, context):
         print(f"Action: {action}, Connection: {connection_id}")
         print(f"Received Google Drive link for processing")
         
+        # Retrieve Google Drive credentials from Secrets Manager
+        credentials = get_google_drive_credentials()
+        
         # Generate unique session ID
         session_id = str(uuid.uuid4())
         
@@ -145,8 +189,8 @@ def handler(event, context):
         )
         
         # Batch send file metadata to SQS
-        # TODO: Integrate with Google Drive API using environment variables
-        # Use GOOGLE_DRIVE_API_KEY and GOOGLE_DRIVE_API_TOKEN to fetch actual files from google_drive_link
+        # TODO: Integrate with Google Drive API using credentials from Secrets Manager
+        # Use credentials['api_key'] and credentials['api_token'] to fetch actual files from google_drive_link
         # For now, simulating file list as placeholder
         batch_size = 10
         for batch_start_idx in range(0, len(simulated_files), batch_size):

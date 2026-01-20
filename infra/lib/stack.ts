@@ -7,11 +7,33 @@ import * as apigatewayv2_integrations from 'aws-cdk-lib/aws-apigatewayv2-integra
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as amplify from 'aws-cdk-lib/aws-amplify';
 import { Construct } from 'constructs';
 
 export class ProcessingFileISOPipingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // ============================================================
+    // Secrets Management - Store sensitive credentials securely
+    // ============================================================
+    
+    // AWS Secrets Manager for Google Drive API credentials
+    // These should be manually set after deployment using AWS CLI or Console:
+    // aws secretsmanager put-secret-value --secret-id GoogleDriveAPICredentials --secret-string '{"api_key":"your_key","api_token":"your_token"}'
+    const googleDriveSecret = new secretsmanager.Secret(this, 'GoogleDriveAPICredentials', {
+      secretName: 'processing-file-iso/google-drive-credentials',
+      description: 'Google Drive API credentials for file processing',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({
+          api_key: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT',
+          api_token: 'PLACEHOLDER_SET_AFTER_DEPLOYMENT'
+        }),
+        generateStringKey: 'placeholder',
+      },
+    });
 
     // S3 Bucket for storing results
     const resultsBucket = new s3.Bucket(this, 'ResultsBucket', {
@@ -62,6 +84,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       environment: {
         QUEUE_URL: processingQueue.queueUrl,
         TABLE_NAME: processResultsTable.tableName,
+        GOOGLE_DRIVE_SECRET_ARN: googleDriveSecret.secretArn,
       },
       layers: [dependenciesLayer],
     });
@@ -69,6 +92,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     // Grant permissions to ScanDispatcher
     processingQueue.grantSendMessages(scanDispatcher);
     processResultsTable.grantWriteData(scanDispatcher);
+    googleDriveSecret.grantRead(scanDispatcher);
 
     // Lambda function for processing files from SQS (new worker)
     const scanWorker = new lambda.Function(this, 'ScanWorker', {
@@ -80,6 +104,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       environment: {
         TABLE_NAME: processResultsTable.tableName,
         RESULTS_BUCKET: resultsBucket.bucketName,
+        GOOGLE_DRIVE_SECRET_ARN: googleDriveSecret.secretArn,
       },
       layers: [dependenciesLayer],
     });
@@ -87,6 +112,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     // Grant permissions to ScanWorker
     processResultsTable.grantReadWriteData(scanWorker);
     resultsBucket.grantReadWrite(scanWorker);
+    googleDriveSecret.grantRead(scanWorker);
 
     // Note: Textract permissions removed from dispatcher as it's no longer needed there.
     // If Textract integration is needed in the future, add to ScanWorker:
@@ -203,6 +229,72 @@ def handler(event, context):
     scanDispatcher.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketStage.url);
     scanWorker.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketStage.url);
 
+    // ============================================================
+    // Parameter Store - Store WebSocket URL for frontend access
+    // ============================================================
+    
+    // Store WebSocket URL in Parameter Store for easy frontend access
+    const websocketUrlParameter = new ssm.StringParameter(this, 'WebSocketUrlParameter', {
+      parameterName: '/processing-file-iso/websocket-url',
+      stringValue: webSocketStage.url,
+      description: 'WebSocket API URL for frontend configuration',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
+    // AWS Amplify - Frontend Hosting Configuration
+    // ============================================================
+    
+    // Create Amplify App for hosting the React frontend
+    // Note: You need to connect your GitHub repository manually in the AWS Console
+    // or provide a GitHub token for automatic deployment
+    const amplifyApp = new amplify.CfnApp(this, 'AmplifyApp', {
+      name: 'ProcessingFileISOPipingFrontend',
+      description: 'Real-time file processing dashboard',
+      repository: 'https://github.com/lequockhanh19521680/Processing_file_ISO_Piping',
+      // Note: For automatic deployments, add accessToken property with GitHub personal access token
+      // accessToken: 'your-github-token', // Store this in Secrets Manager and reference it
+      iamServiceRole: this.createAmplifyServiceRole().roleArn,
+      buildSpec: `version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - cd frontend
+        - npm ci
+    build:
+      commands:
+        - echo "VITE_WEBSOCKET_URL=${webSocketStage.url}" > .env.production
+        - npm run build
+  artifacts:
+    baseDirectory: frontend/dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - frontend/node_modules/**/*
+`,
+      environmentVariables: [
+        {
+          name: 'VITE_WEBSOCKET_URL',
+          value: webSocketStage.url,
+        },
+      ],
+    });
+
+    // Create Amplify branch for main/master branch
+    const amplifyBranch = new amplify.CfnBranch(this, 'AmplifyBranch', {
+      appId: amplifyApp.attrAppId,
+      branchName: 'main',
+      enableAutoBuild: true,
+      environmentVariables: [
+        {
+          name: 'VITE_WEBSOCKET_URL',
+          value: webSocketStage.url,
+        },
+      ],
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'WebSocketURL', {
       value: webSocketStage.url,
@@ -214,6 +306,30 @@ def handler(event, context):
       value: resultsBucket.bucketName,
       description: 'S3 Bucket for results',
       exportName: 'ResultsBucketName',
+    });
+
+    new cdk.CfnOutput(this, 'GoogleDriveSecretArn', {
+      value: googleDriveSecret.secretArn,
+      description: 'ARN of Google Drive API credentials secret',
+      exportName: 'GoogleDriveSecretArn',
+    });
+
+    new cdk.CfnOutput(this, 'WebSocketUrlParameterName', {
+      value: websocketUrlParameter.parameterName,
+      description: 'SSM Parameter name for WebSocket URL',
+      exportName: 'WebSocketUrlParameterName',
+    });
+
+    new cdk.CfnOutput(this, 'AmplifyAppId', {
+      value: amplifyApp.attrAppId,
+      description: 'Amplify App ID',
+      exportName: 'AmplifyAppId',
+    });
+
+    new cdk.CfnOutput(this, 'AmplifyAppUrl', {
+      value: `https://main.${amplifyApp.attrAppId}.amplifyapp.com`,
+      description: 'Amplify App URL',
+      exportName: 'AmplifyAppUrl',
     });
 
     new cdk.CfnOutput(this, 'WebSocketApiId', {
@@ -233,5 +349,23 @@ def handler(event, context):
       description: 'DynamoDB Table for processing results',
       exportName: 'ProcessResultsTableName',
     });
+  }
+
+  /**
+   * Create IAM service role for AWS Amplify
+   * This role allows Amplify to access necessary AWS services
+   */
+  private createAmplifyServiceRole(): iam.Role {
+    const role = new iam.Role(this, 'AmplifyServiceRole', {
+      assumedBy: new iam.ServicePrincipal('amplify.amazonaws.com'),
+      description: 'Service role for AWS Amplify',
+    });
+
+    // Add permissions for Amplify to access necessary resources
+    role.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess-Amplify')
+    );
+
+    return role;
   }
 }
