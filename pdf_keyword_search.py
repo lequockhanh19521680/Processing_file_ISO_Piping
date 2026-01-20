@@ -316,7 +316,7 @@ class PDFKeywordSearcher:
                 # Prepare result for this keyword
                 if best_match:
                     # Determine status based on frequency (always show actual count)
-                    # Note: max_count > 0 is guaranteed when best_match exists (invariant from line 305)
+                    # Note: max_count > 0 is guaranteed when best_match exists (invariant from line 309)
                     # Both match_count and status contain the count for consistency and clarity
                     status = str(max_count)
                     
