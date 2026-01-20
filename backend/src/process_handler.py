@@ -92,6 +92,7 @@ validate_environment_variables()
 def extract_folder_id_from_url(drive_link: str) -> str:
     """
     Extract folder ID from Google Drive URL.
+    Validates that the extracted ID matches expected Google Drive ID format.
     """
     patterns = [
         r'folders/([a-zA-Z0-9_-]+)',
@@ -101,9 +102,19 @@ def extract_folder_id_from_url(drive_link: str) -> str:
     for pattern in patterns:
         match = re.search(pattern, drive_link)
         if match:
-            return match.group(1)
+            folder_id = match.group(1)
+            # Validate folder ID format (alphanumeric, underscore, hyphen only)
+            if re.match(r'^[a-zA-Z0-9_-]+$', folder_id):
+                return folder_id
     
-    return drive_link.strip()
+    # If no pattern matched, return the stripped input but validate it
+    folder_id = drive_link.strip()
+    if re.match(r'^[a-zA-Z0-9_-]+$', folder_id):
+        return folder_id
+    
+    # If validation fails, return empty string
+    print(f"Warning: Invalid folder ID format: {drive_link}")
+    return ""
 
 
 def get_google_drive_service(credentials: Dict[str, str]):
@@ -326,8 +337,8 @@ def perform_scan_logic(event):
                         'type': 'ERROR',
                         'message': error_msg
                     })
-                except:
-                    pass
+                except Exception as ws_error:
+                    print(f"Failed to send error to WebSocket: {str(ws_error)}")
                     
                 print("Falling back to simulation mode")
                 use_simulation = True
@@ -405,7 +416,7 @@ def perform_scan_logic(event):
                             print(f"  Failed message {failed['Id']}: {failed['Message']}")
                     
                     # Print progress every 100 files
-                    if total_sent % 100 == 0 or total_sent == len(files_list):
+                    if total_sent > 0 and (total_sent % 100 == 0 or total_sent == len(files_list)):
                         print(f"Sent {total_sent}/{len(files_list)} files to SQS queue")
                         
                 except Exception as e:

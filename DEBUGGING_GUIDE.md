@@ -23,7 +23,7 @@ query = f"'{current_folder_id}' in parents and (mimeType='application/pdf' or mi
 ```
 
 **Why this helps:**
-- Some PDF files in Google Drive are stored with generic `application/octet-stream` MIME type
+- Some PDF files in Google Drive are stored with a generic `application/octet-stream` MIME type
 - The new query catches PDFs by both MIME type AND file extension
 - This is especially common for uploaded PDFs vs Google-generated PDFs
 
