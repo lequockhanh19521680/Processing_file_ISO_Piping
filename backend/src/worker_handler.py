@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Dict, List, Any
 import traceback
-from decimal import Decimal
+from openpyxl import Workbook
 
 # AWS clients
 s3_client = boto3.client('s3')
@@ -72,8 +72,6 @@ def process_single_file(file_name: str, file_content: str, target_hole_codes: Li
 def generate_excel_report(session_id: str, bucket: str) -> str:
     """Generate Excel report from DynamoDB results and upload to S3"""
     try:
-        from openpyxl import Workbook
-        
         table = dynamodb.Table(TABLE_NAME)
         
         # Query all items for this session
@@ -194,7 +192,7 @@ def handler(event, context):
                     })
                 
                 # Send progress update
-                progress = min(100, int((processed_count / total_files) * 100))
+                progress = min(100, int((processed_count / total_files) * 100)) if total_files > 0 else 0
                 ws_manager.send_update({
                     'type': 'PROGRESS',
                     'value': progress,

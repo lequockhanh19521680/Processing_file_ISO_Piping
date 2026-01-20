@@ -88,6 +88,13 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     processResultsTable.grantReadWriteData(scanWorker);
     resultsBucket.grantReadWrite(scanWorker);
 
+    // Note: Textract permissions removed from dispatcher as it's no longer needed there.
+    // If Textract integration is needed in the future, add to ScanWorker:
+    // scanWorker.addToRolePolicy(new iam.PolicyStatement({
+    //   actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
+    //   resources: ['*'],
+    // }));
+
     // Add SQS as event source for ScanWorker
     scanWorker.addEventSource(
       new lambdaEventSources.SqsEventSource(processingQueue, {

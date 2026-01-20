@@ -109,13 +109,13 @@ def handler(event, context):
         
         # Batch send file metadata to SQS
         batch_size = 10
-        for i in range(0, len(simulated_files), batch_size):
-            batch = simulated_files[i:i + batch_size]
+        for batch_start_idx in range(0, len(simulated_files), batch_size):
+            batch = simulated_files[batch_start_idx:batch_start_idx + batch_size]
             entries = []
             
             for idx, file_data in enumerate(batch):
                 entries.append({
-                    'Id': str(i + idx),
+                    'Id': str(batch_start_idx + idx),
                     'MessageBody': json.dumps({
                         'session_id': session_id,
                         'file_name': file_data['name'],
