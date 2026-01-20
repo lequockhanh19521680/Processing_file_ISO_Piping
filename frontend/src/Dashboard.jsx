@@ -215,8 +215,15 @@ const Dashboard = () => {
       return;
     }
     
-    if (!googleDriveLink.includes("drive.google.com")) {
-      setValidationError("Please enter a valid Google Drive URL (must contain 'drive.google.com')");
+    // Validate that the URL is actually a Google Drive URL
+    try {
+      const url = new URL(googleDriveLink);
+      if (!url.hostname.endsWith('drive.google.com') && url.hostname !== 'drive.google.com') {
+        setValidationError("Please enter a valid Google Drive URL (must be from drive.google.com)");
+        return;
+      }
+    } catch (e) {
+      setValidationError("Please enter a valid URL");
       return;
     }
 
