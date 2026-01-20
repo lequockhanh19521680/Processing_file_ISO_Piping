@@ -2,15 +2,21 @@ import json
 import os
 import boto3
 import re
+import io
 from datetime import datetime
 from typing import Dict, List, Any
 import traceback
 from openpyxl import Workbook
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from googleapiclient.http import MediaIoBaseDownload
+from PyPDF2 import PdfReader
 
 # AWS clients
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 secretsmanager_client = boto3.client('secretsmanager')
+textract_client = boto3.client('textract')
 
 # Environment variables
 TABLE_NAME = os.environ.get('TABLE_NAME', '')
@@ -27,7 +33,7 @@ def get_google_drive_credentials() -> Dict[str, str]:
     Retrieve Google Drive API credentials from AWS Secrets Manager.
     
     Returns:
-        Dictionary containing 'api_key' and 'api_token'
+        Dictionary containing 'access_token' and 'refresh_token'
     """
     global _secrets_cache
     
@@ -36,15 +42,17 @@ def get_google_drive_credentials() -> Dict[str, str]:
         return _secrets_cache['google_drive']
     
     if not GOOGLE_DRIVE_SECRET_ARN:
-        return {'api_key': '', 'api_token': ''}
+        return {'access_token': '', 'refresh_token': '', 'client_id': '', 'client_secret': ''}
     
     try:
         response = secretsmanager_client.get_secret_value(SecretId=GOOGLE_DRIVE_SECRET_ARN)
         secret_data = json.loads(response['SecretString'])
         
         credentials = {
-            'api_key': secret_data.get('api_key', ''),
-            'api_token': secret_data.get('api_token', '')
+            'access_token': secret_data.get('access_token', ''),
+            'refresh_token': secret_data.get('refresh_token', ''),
+            'client_id': secret_data.get('client_id', ''),
+            'client_secret': secret_data.get('client_secret', '')
         }
         
         # Cache the credentials
@@ -54,7 +62,7 @@ def get_google_drive_credentials() -> Dict[str, str]:
         
     except Exception as e:
         print(f"Error retrieving Google Drive credentials: {str(e)}")
-        return {'api_key': '', 'api_token': ''}
+        return {'access_token': '', 'refresh_token': '', 'client_id': '', 'client_secret': ''}
 
 
 class WebSocketManager:
@@ -92,10 +100,139 @@ def extract_hole_codes_from_text(text: str) -> List[str]:
     return hole_codes
 
 
-def process_single_file(file_name: str, file_content: str, target_hole_codes: List[str]) -> Dict[str, Any]:
+def get_google_drive_service(credentials: Dict[str, str]):
+    """
+    Create Google Drive API service client.
+    """
+    if not credentials.get('access_token'):
+        return None
+    
+    try:
+        # Create credentials object
+        creds = Credentials(
+            token=credentials['access_token'],
+            refresh_token=credentials.get('refresh_token'),
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=credentials.get('client_id'),
+            client_secret=credentials.get('client_secret')
+        )
+        
+        # Build the Drive API service
+        service = build('drive', 'v3', credentials=creds)
+        return service
+    except Exception as e:
+        print(f"Error creating Google Drive service: {str(e)}")
+        return None
+
+
+def download_file_from_drive(service, file_id: str) -> bytes:
+    """
+    Download file content from Google Drive.
+    """
+    if not service:
+        return b""
+    
+    try:
+        request = service.files().get_media(fileId=file_id)
+        file_buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_buffer, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        
+        file_buffer.seek(0)
+        return file_buffer.read()
+        
+    except Exception as e:
+        print(f"Error downloading file from Google Drive: {str(e)}")
+        return b""
+
+
+def extract_text_with_textract(pdf_bytes: bytes) -> str:
+    """
+    Extract text from PDF using AWS Textract.
+    """
+    try:
+        # Call Textract to analyze document
+        response = textract_client.detect_document_text(
+            Document={'Bytes': pdf_bytes}
+        )
+        
+        # Extract text from all blocks
+        text_lines = []
+        for block in response.get('Blocks', []):
+            if block['BlockType'] == 'LINE':
+                text_lines.append(block.get('Text', ''))
+        
+        return ' '.join(text_lines)
+        
+    except Exception as e:
+        print(f"Error extracting text with Textract: {str(e)}")
+        return ""
+
+
+def extract_text_with_pypdf2(pdf_bytes: bytes) -> str:
+    """
+    Extract text from PDF using PyPDF2 (fallback method).
+    """
+    try:
+        pdf_buffer = io.BytesIO(pdf_bytes)
+        pdf_reader = PdfReader(pdf_buffer)
+        
+        text_parts = []
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                text_parts.append(text)
+        
+        return ' '.join(text_parts)
+        
+    except Exception as e:
+        print(f"Error extracting text with PyPDF2: {str(e)}")
+        return ""
+
+
+def process_single_file(file_id: str, file_name: str, target_hole_codes: List[str], use_simulation: bool = False) -> Dict[str, Any]:
     """Process a single file and check for hole code matches"""
-    # Simulate text extraction (in real scenario, use Textract for PDFs)
-    found_hole_codes = extract_hole_codes_from_text(file_content)
+    
+    if use_simulation:
+        # Simulation mode - generate mock content
+        file_content = f'Sample content for {file_name} with HOLE-{hash(file_name) % 10}'
+        found_hole_codes = extract_hole_codes_from_text(file_content)
+    else:
+        # Real processing mode
+        try:
+            # Get Google Drive credentials
+            credentials = get_google_drive_credentials()
+            service = get_google_drive_service(credentials)
+            
+            if not service:
+                print(f"No Google Drive service available for {file_name}, using simulation")
+                file_content = f'Sample content for {file_name}'
+                found_hole_codes = extract_hole_codes_from_text(file_content)
+            else:
+                # Download file from Google Drive
+                pdf_bytes = download_file_from_drive(service, file_id)
+                
+                if not pdf_bytes:
+                    print(f"Could not download {file_name}, skipping")
+                    found_hole_codes = []
+                else:
+                    # Try Textract first, fall back to PyPDF2
+                    try:
+                        text_content = extract_text_with_textract(pdf_bytes)
+                        print(f"Extracted text with Textract from {file_name}")
+                    except Exception as e:
+                        print(f"Textract failed for {file_name}, using PyPDF2: {str(e)}")
+                        text_content = extract_text_with_pypdf2(pdf_bytes)
+                    
+                    # Extract hole codes from text
+                    found_hole_codes = extract_hole_codes_from_text(text_content)
+        except Exception as e:
+            print(f"Error processing {file_name}: {str(e)}")
+            traceback.print_exc()
+            found_hole_codes = []
     
     # Check for matches with target hole codes
     matches = [code for code in found_hole_codes if code in target_hole_codes]
@@ -180,15 +317,16 @@ def handler(event, context):
             message_body = json.loads(record['body'])
             
             session_id = message_body['session_id']
+            file_id = message_body.get('file_id', '')
             file_name = message_body['file_name']
-            file_content = message_body['file_content']
             pdf_link = message_body['pdf_link']
             target_hole_codes = message_body['target_hole_codes']
+            use_simulation = message_body.get('use_simulation', False)
             
             print(f"Processing file: {file_name} for session: {session_id}")
             
             # Process the file
-            result = process_single_file(file_name, file_content, target_hole_codes)
+            result = process_single_file(file_id, file_name, target_hole_codes, use_simulation)
             
             # Write result to DynamoDB
             table.put_item(
