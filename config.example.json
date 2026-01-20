@@ -1,0 +1,26 @@
+{
+  "demo": {
+    "websocket_url": "wss://xxxxx.execute-api.us-east-1.amazonaws.com/prod",
+    "google_drive_token": "demo_token_replace_with_real",
+    "target_hole_codes": [
+      "HOLE-1",
+      "HOLE-2",
+      "HOLE-3",
+      "HOLE-5",
+      "HOLE-7"
+    ],
+    "simulation": {
+      "total_files": 100,
+      "batch_size": 10,
+      "processing_delay_ms": 50
+    }
+  },
+  "production": {
+    "websocket_url": "REPLACE_AFTER_CDK_DEPLOY",
+    "simulation": {
+      "total_files": 6600,
+      "batch_size": 10,
+      "processing_delay_ms": 0
+    }
+  }
+}

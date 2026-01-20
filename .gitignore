@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# CDK
+.cdk.staging/
+cdk.out/
+*.js
+*.d.ts
+!vite.config.js
+!tailwind.config.js
+!postcss.config.js
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+backend/layer/python/
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+/tmp/
+*.tmp
