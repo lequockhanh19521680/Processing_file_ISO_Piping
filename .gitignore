@@ -72,3 +72,12 @@ output/
 debug.log
 test_pdfs/
 test_*.xlsx
+
+# PDF Search Tool specific
+pdf_search_tool/logs/*.log
+pdf_search_tool/output/*.xlsx
+pdf_search_tool/data/*.xlsx
+pdf_search_tool/data/*.pdf
+!pdf_search_tool/data/.gitkeep
+!pdf_search_tool/logs/.gitkeep
+!pdf_search_tool/output/.gitkeep
