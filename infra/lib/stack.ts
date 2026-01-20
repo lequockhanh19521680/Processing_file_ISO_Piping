@@ -119,6 +119,9 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       code: lambda.Code.fromAsset("../backend/src"),
       timeout: cdk.Duration.seconds(30),
       memorySize: 1024,
+      // Reserve concurrency for faster processing of large batches (6600 files)
+      // This allows up to 100 workers to run in parallel
+      reservedConcurrentExecutions: 100,
       environment: {
         TABLE_NAME: processResultsTable.tableName,
         RESULTS_BUCKET: resultsBucket.bucketName,
@@ -133,9 +136,12 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     googleDriveSecret.grantRead(scanWorker);
 
     // Add SQS as event source for ScanWorker
+    // Batch size 10 allows processing 10 files per Lambda invocation
+    // With 100 concurrent workers, can process 1000 files simultaneously
     scanWorker.addEventSource(
       new lambdaEventSources.SqsEventSource(processingQueue, {
         batchSize: 10,
+        maxBatchingWindow: cdk.Duration.seconds(0), // Process immediately
       }),
     );
 
