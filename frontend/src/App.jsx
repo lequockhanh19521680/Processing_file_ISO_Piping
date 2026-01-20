@@ -117,12 +117,9 @@ function App() {
                 setCurrentStage(data.message);
                 setProgress(prev => [...prev, { type: 'success', message: data.message }]);
               } else if (data.type === 'file') {
-                // Convert base64 back to blob
+                // Convert base64 back to blob - optimized version
                 const binaryString = atob(data.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
+                const bytes = Uint8Array.from(binaryString, c => c.charCodeAt(0));
                 const blob = new Blob([bytes], {
                   type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 });

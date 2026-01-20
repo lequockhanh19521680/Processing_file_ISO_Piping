@@ -14,6 +14,7 @@ import os
 from datetime import datetime
 import asyncio
 import json
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from drive_service import DriveService
@@ -108,7 +109,10 @@ async def process_file_with_progress(
             processed_count = 0
             
             def process_with_progress(pdf_info):
-                return _download_and_extract_pdf(drive_service, pdf_extractor, pdf_info)
+                # Create a new drive service instance per thread for thread safety
+                thread_drive_service = DriveService()
+                thread_drive_service.service = drive_service.service  # Reuse authenticated service
+                return _download_and_extract_pdf(thread_drive_service, pdf_extractor, pdf_info)
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_pdf = {
@@ -180,7 +184,6 @@ async def process_file_with_progress(
             yield f"data: {json.dumps({'type': 'complete', 'message': 'Processing complete!'})}\n\n"
             
             # Send the file as base64
-            import base64
             file_b64 = base64.b64encode(output_bytes).decode('utf-8')
             yield f"data: {json.dumps({'type': 'file', 'data': file_b64, 'filename': 'processed_result.xlsx'})}\n\n"
             
