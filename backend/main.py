@@ -126,7 +126,14 @@ async def process_file_with_progress(
                         
                         # Send progress update every 10 files or at key milestones
                         if processed_count % 10 == 0 or processed_count == len(pdf_files):
-                            yield f"data: {json.dumps({'type': 'progress', 'stage': 'processing_pdfs', 'message': f'Processing PDF {processed_count}/{len(pdf_files)}: {pdf_info[\"file_name\"]}', 'current': processed_count, 'total': len(pdf_files)})}\n\n"
+                            progress_data = {
+                                'type': 'progress',
+                                'stage': 'processing_pdfs',
+                                'message': f'Processing PDF {processed_count}/{len(pdf_files)}: {pdf_info["file_name"]}',
+                                'current': processed_count,
+                                'total': len(pdf_files)
+                            }
+                            yield f"data: {json.dumps(progress_data)}\n\n"
                     except Exception as e:
                         print(f"Error processing {pdf_info['file_name']}: {str(e)}")
             
