@@ -108,6 +108,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     });
 
     // Grant permissions to ScanDispatcher
+    scanDispatcher.grantInvoke(scanDispatcher);
     processingQueue.grantSendMessages(scanDispatcher);
     processResultsTable.grantWriteData(scanDispatcher);
     googleDriveSecret.grantRead(scanDispatcher);
@@ -175,12 +176,12 @@ def handler(event, context):
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: "index.handler",
       code: lambda.Code.fromInline(`
-def handler(event, context):
-    return {
-        'statusCode': 200,
-        'body': 'Default route'
-    }
-`),
+        def handler(event, context):
+            return {
+                'statusCode': 200,
+                'body': 'pong'
+            }
+        `),
       timeout: cdk.Duration.seconds(30),
     });
 
