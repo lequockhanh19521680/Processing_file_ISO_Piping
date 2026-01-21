@@ -108,7 +108,6 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     });
 
     // Grant permissions to ScanDispatcher
-    scanDispatcher.grantInvoke(scanDispatcher);
     processingQueue.grantSendMessages(scanDispatcher);
     processResultsTable.grantWriteData(scanDispatcher);
     googleDriveSecret.grantRead(scanDispatcher);
@@ -119,9 +118,10 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       handler: "worker_handler.handler",
       code: lambda.Code.fromAsset("../backend/src"),
       timeout: cdk.Duration.seconds(600),
-      memorySize: 1024,
+      memorySize: 3008, // Increased from 1024 to 3008 for better CPU performance
       // Reserve concurrency for faster processing of large batches (6600 files)
       // This allows up to 100 workers to run in parallel
+      reservedConcurrentExecutions: 100, // Enable parallel processing
       environment: {
         TABLE_NAME: processResultsTable.tableName,
         RESULTS_BUCKET: resultsBucket.bucketName,
@@ -141,7 +141,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     scanWorker.addEventSource(
       new lambdaEventSources.SqsEventSource(processingQueue, {
         batchSize: 10,
-        maxConcurrency: 5,
+        maxConcurrency: 100, // Increased from 5 to 100 for parallel processing
       }),
     );
 

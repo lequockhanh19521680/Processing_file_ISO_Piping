@@ -12,6 +12,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.http import MediaIoBaseDownload
 from pypdf import PdfReader
 from decimal import Decimal  # <--- QUAN TRỌNG: Import Decimal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import threading
 
 # AWS clients
 s3_client = boto3.client('s3')
@@ -26,6 +29,10 @@ GOOGLE_DRIVE_SECRET_ARN = os.environ.get('GOOGLE_DRIVE_SECRET_ARN', '')
 
 # Cache for secrets to avoid repeated API calls
 _secrets_cache = {}
+# Cache for Google Drive service to reuse across invocations
+_drive_service_cache = None
+# Lock for thread-safe cache access
+_cache_lock = threading.Lock()
 
 # --- CLASS XỬ LÝ LỖI DECIMAL (FIX LỖI JSON SERIALIZABLE) ---
 class DecimalEncoder(json.JSONEncoder):
@@ -101,25 +108,35 @@ class WebSocketManager:
 
 def get_google_drive_service(credentials: Dict[str, str]):
     """
-    Create Google Drive API service client.
+    Create Google Drive API service client with thread-safe caching.
     """
-    if not credentials.get('access_token'):
-        return None
+    global _drive_service_cache
     
-    try:
-        creds = Credentials(
-            token=credentials['access_token'],
-            refresh_token=credentials.get('refresh_token'),
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=credentials.get('client_id'),
-            client_secret=credentials.get('client_secret')
-        )
+    # Thread-safe cache check and update
+    with _cache_lock:
+        # Return cached service if available
+        if _drive_service_cache is not None:
+            return _drive_service_cache
         
-        service = build('drive', 'v3', credentials=creds)
-        return service
-    except Exception as e:
-        print(f"Error creating Google Drive service: {str(e)}")
-        return None
+        if not credentials.get('access_token'):
+            return None
+        
+        try:
+            creds = Credentials(
+                token=credentials['access_token'],
+                refresh_token=credentials.get('refresh_token'),
+                token_uri='https://oauth2.googleapis.com/token',
+                client_id=credentials.get('client_id'),
+                client_secret=credentials.get('client_secret')
+            )
+            
+            service = build('drive', 'v3', credentials=creds)
+            # Cache the service for reuse
+            _drive_service_cache = service
+            return service
+        except Exception as e:
+            print(f"Error creating Google Drive service: {str(e)}")
+            return None
 
 
 def download_file_from_drive(service, file_id: str) -> bytes:
@@ -285,41 +302,90 @@ def generate_excel_report(session_id: str, bucket: str) -> str:
         return ""
 
 
+def process_file_with_metadata(message_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process a single file with its metadata. 
+    This function is designed to be called in parallel.
+    """
+    session_id = message_data['session_id']
+    file_id = message_data.get('file_id', '')
+    file_name = message_data['file_name']
+    pdf_link = message_data['pdf_link']
+    target_hole_codes = message_data['target_hole_codes']
+    use_simulation = message_data.get('use_simulation', False)
+    
+    print(f"Processing file: {file_name} for session: {session_id}")
+    start_time = time.time()
+    
+    # Process the file
+    result = process_single_file(file_id, file_name, target_hole_codes, use_simulation)
+    
+    elapsed_time = time.time() - start_time
+    print(f"Processed {file_name} in {elapsed_time:.2f} seconds")
+    
+    # Return result with metadata
+    return {
+        'session_id': session_id,
+        'file_name': file_name,
+        'pdf_link': pdf_link,
+        'result': result
+    }
+
+
 def handler(event, context):
-    """Worker Lambda handler - processes files from SQS"""
+    """Worker Lambda handler - processes files from SQS in parallel"""
     print(f"Received SQS event with {len(event.get('Records', []))} records")
     
     table = dynamodb.Table(TABLE_NAME)
     
     try:
-        # Process each SQS message
+        # Prepare all message data for parallel processing
+        messages_to_process = []
         for record in event.get('Records', []):
             message_body = json.loads(record['body'])
+            messages_to_process.append(message_body)
+        
+        # Process files in parallel using ThreadPoolExecutor
+        # Use max_workers=10 to process up to 10 files concurrently
+        results_list = []
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Submit all tasks
+            future_to_message = {
+                executor.submit(process_file_with_metadata, msg): msg 
+                for msg in messages_to_process
+            }
             
-            session_id = message_body['session_id']
-            file_id = message_body.get('file_id', '')
-            file_name = message_body['file_name']
-            pdf_link = message_body['pdf_link']
-            target_hole_codes = message_body['target_hole_codes']
-            use_simulation = message_body.get('use_simulation', False)
+            # Collect results as they complete
+            for future in as_completed(future_to_message):
+                try:
+                    result_data = future.result()
+                    results_list.append(result_data)
+                except Exception as e:
+                    msg = future_to_message[future]
+                    print(f"Error processing file {msg.get('file_name', 'unknown')}: {str(e)}")
+                    traceback.print_exc()
+        
+        print(f"Completed parallel processing of {len(results_list)} files")
+        
+        # Now update DynamoDB and send WebSocket updates for all results
+        for result_data in results_list:
+            session_id = result_data['session_id']
+            file_name = result_data['file_name']
+            pdf_link = result_data['pdf_link']
+            result = result_data['result']
             
-            print(f"Processing file: {file_name} for session: {session_id}")
-            
-            # Process the file
-            result = process_single_file(file_id, file_name, target_hole_codes, use_simulation)
-            
-            # Write result to DynamoDB
+            # Write result to DynamoDB if matches found
             if result['found_codes']:
-                    table.put_item(
-                        Item={
-                            'session_id': session_id,
-                            'file_name': file_name,
-                            'status': result['status'],
-                            'found_codes': result['found_codes'],
-                            'pdf_link': pdf_link,
-                            'timestamp': datetime.now().isoformat()
-                        }
-                    )
+                table.put_item(
+                    Item={
+                        'session_id': session_id,
+                        'file_name': file_name,
+                        'status': result['status'],
+                        'found_codes': result['found_codes'],
+                        'pdf_link': pdf_link,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
             
             # Atomically increment processed_count in meta item
             response = table.update_item(
@@ -352,14 +418,15 @@ def handler(event, context):
                         }
                     })
                 
-                # Send progress update
-                progress = min(100, int((processed_count / total_files) * 100)) if total_files > 0 else 0
-                ws_manager.send_update({
-                    'type': 'PROGRESS',
-                    'value': progress,
-                    'processed': processed_count,
-                    'total': total_files
-                })
+                # Send progress update (only for every 10th file to reduce noise)
+                if processed_count % 10 == 0 or processed_count >= total_files:
+                    progress = min(100, int((processed_count / total_files) * 100)) if total_files > 0 else 0
+                    ws_manager.send_update({
+                        'type': 'PROGRESS',
+                        'value': progress,
+                        'processed': processed_count,
+                        'total': total_files
+                    })
                 
                 # Check if processing is complete
                 if processed_count >= total_files:
