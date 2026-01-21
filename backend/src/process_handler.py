@@ -117,9 +117,39 @@ def extract_folder_id_from_url(drive_link: str) -> str:
     return ""
 
 
-def get_google_drive_service(credentials: Dict[str, str]):
+def update_google_drive_credentials_in_secrets_manager(new_credentials: Dict[str, str]):
     """
-    Create Google Drive API service client.
+    Update Google Drive credentials in AWS Secrets Manager.
+    """
+    global _secrets_cache
+    
+    if not GOOGLE_DRIVE_SECRET_ARN:
+        print("Warning: GOOGLE_DRIVE_SECRET_ARN not set. Cannot update credentials.")
+        return False
+    
+    try:
+        # Update the secret in AWS Secrets Manager
+        secretsmanager_client.put_secret_value(
+            SecretId=GOOGLE_DRIVE_SECRET_ARN,
+            SecretString=json.dumps(new_credentials)
+        )
+        
+        # Clear the cache so next call fetches the new credentials
+        _secrets_cache.pop('google_drive', None)
+        
+        print("Successfully updated Google Drive credentials in Secrets Manager")
+        return True
+        
+    except Exception as e:
+        print(f"Error updating Google Drive credentials in Secrets Manager: {str(e)}")
+        traceback.print_exc()
+        return False
+
+
+def get_google_drive_service(credentials: Dict[str, str], ws_manager=None):
+    """
+    Create Google Drive API service client with auto-refresh capability.
+    If access token is expired, automatically refreshes it and updates AWS Secrets Manager.
     """
     if not credentials.get('access_token'):
         return None
@@ -137,10 +167,50 @@ def get_google_drive_service(credentials: Dict[str, str]):
             scopes=scopes
         )
         
+        # Check if token is expired and refresh if needed
+        if creds.expired and creds.refresh_token:
+            try:
+                print("Access token is expired. Attempting to refresh...")
+                from google.auth.transport.requests import Request
+                creds.refresh(Request())
+                
+                print("Successfully refreshed access token")
+                
+                # Update credentials dict with new token
+                new_credentials = {
+                    'access_token': creds.token,
+                    'refresh_token': creds.refresh_token or credentials.get('refresh_token'),
+                    'client_id': credentials.get('client_id'),
+                    'client_secret': credentials.get('client_secret')
+                }
+                
+                # Persist new credentials to AWS Secrets Manager
+                update_success = update_google_drive_credentials_in_secrets_manager(new_credentials)
+                
+                if update_success:
+                    print("Auto-refresh completed: new tokens saved to Secrets Manager")
+                else:
+                    print("Warning: Token refreshed but failed to save to Secrets Manager")
+                    
+            except Exception as refresh_error:
+                error_msg = f"Failed to refresh Google Drive token: {str(refresh_error)}"
+                print(error_msg)
+                traceback.print_exc()
+                
+                # Notify client via WebSocket if available
+                if ws_manager:
+                    ws_manager.send_update({
+                        'type': 'ERROR',
+                        'message': f"Google Drive authentication failed. {error_msg}. Please re-authenticate your Google Drive account."
+                    })
+                
+                return None
+        
         service = build('drive', 'v3', credentials=creds)
         return service
     except Exception as e:
         print(f"Error creating Google Drive service: {str(e)}")
+        traceback.print_exc()
         return None
 
 
@@ -302,7 +372,7 @@ def perform_scan_logic(event):
                 folder_id = extract_folder_id_from_url(google_drive_link)
                 print(f"Extracted folder ID: {folder_id}")
                 
-                service = get_google_drive_service(credentials)
+                service = get_google_drive_service(credentials, ws_manager)
                 if service:
                     # USE RECURSIVE FETCH HERE
                     files_list = fetch_files_from_google_drive_recursive(service, folder_id)
@@ -372,7 +442,8 @@ def perform_scan_logic(event):
                 'processed_count': 0,
                 'target_hole_codes': target_hole_codes,
                 'google_drive_link': google_drive_link,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'status': 'IN_PROGRESS'
             }
         )
         
@@ -452,6 +523,99 @@ def perform_scan_logic(event):
             pass
 
 
+def handle_reconnect_action(session_id: str, connection_id: str):
+    """
+    Handle reconnect action: fetch session state from DynamoDB and send back to client.
+    """
+    try:
+        print(f"Handling reconnect for session {session_id}, connection {connection_id}")
+        
+        # Initialize WebSocket manager
+        ws_manager = WebSocketManager(WEBSOCKET_API_ENDPOINT, connection_id)
+        
+        # Fetch session metadata from DynamoDB
+        table = dynamodb.Table(TABLE_NAME)
+        
+        # Get the meta item for this session
+        response = table.get_item(
+            Key={
+                'session_id': session_id,
+                'file_name': 'meta'
+            }
+        )
+        
+        if 'Item' not in response:
+            print(f"Session {session_id} not found in DynamoDB")
+            ws_manager.send_update({
+                'type': 'ERROR',
+                'message': f'Session {session_id} not found. It may have expired or does not exist.'
+            })
+            return
+        
+        session_meta = response['Item']
+        
+        # Fetch all results (matches) for this session
+        results_response = table.query(
+            KeyConditionExpression='session_id = :sid',
+            FilterExpression='file_name <> :meta',
+            ExpressionAttributeValues={
+                ':sid': session_id,
+                ':meta': 'meta'
+            }
+        )
+        
+        results = results_response.get('Items', [])
+        
+        # Calculate current progress
+        total_files = int(session_meta.get('total_files', 0))
+        processed_count = int(session_meta.get('processed_count', 0))
+        progress = int((processed_count / total_files * 100)) if total_files > 0 else 0
+        
+        # Prepare results data
+        results_data = []
+        for item in results:
+            results_data.append({
+                'hole_code': item.get('hole_code', ''),
+                'file_name': item.get('file_name', ''),
+                'status': item.get('status', ''),
+                'pdf_link': item.get('pdf_link', ''),
+                'timestamp': item.get('timestamp', '')
+            })
+        
+        # Send SYNC_STATE message to client
+        sync_state = {
+            'type': 'SYNC_STATE',
+            'message': 'State synchronized from server',
+            'session_id': session_id,
+            'total_files': total_files,
+            'processed_count': processed_count,
+            'progress': progress,
+            'results': results_data,
+            'status': session_meta.get('status', 'IN_PROGRESS'),
+            'drive_link': session_meta.get('google_drive_link', ''),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        ws_manager.send_update(sync_state)
+        
+        print(f"Successfully sent SYNC_STATE for session {session_id}: {processed_count}/{total_files} files")
+        
+    except Exception as e:
+        error_message = f"Error handling reconnect: {str(e)}"
+        print(error_message)
+        traceback.print_exc()
+        
+        # Try to send error to client
+        try:
+            if 'ws_manager' in locals():
+                ws_manager.send_update({
+                    'type': 'ERROR',
+                    'message': error_message
+                })
+        except:
+            pass
+
+
 def handler(event, context):
     """
     Main Lambda Handler (Dispatcher).
@@ -489,36 +653,60 @@ def handler(event, context):
             
         action = body.get('action', '')
         
-        # Validate action
-        if action != 'start_scan':
-             return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Invalid action'})
+        # Handle different actions
+        if action == 'reconnect':
+            # Handle reconnect action
+            session_id = body.get('session_id', '')
+            
+            if not session_id:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({'error': 'session_id is required for reconnect action'})
+                }
+            
+            print(f"Received reconnect request for session {session_id}, connection {connection_id}")
+            
+            # Handle reconnect in the same invocation (it's a fast operation)
+            handle_reconnect_action(session_id, connection_id)
+            
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Reconnect request processed',
+                    'session_id': session_id
+                })
             }
             
-        print(f"Received scan request for Connection: {connection_id}. Invoking async worker.")
+        elif action == 'start_scan':
+            # Handle start_scan action
+            print(f"Received scan request for Connection: {connection_id}. Invoking async worker.")
 
-        # Invoke self asynchronously
-        # This returns immediately so API Gateway doesn't timeout
-        lambda_client.invoke(
-            FunctionName=context.function_name,
-            InvocationType='Event',  # 'Event' = Async
-            Payload=json.dumps({
-                'is_async_scan': True,
-                'body_payload': body,
-                'connection_id': connection_id,
-                'requestContext': request_context # Pass context if needed
-            })
-        )
-        
-        # Return success immediately to the client
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'message': 'Scan request accepted. Processing in background.',
-                'status': 'ACCEPTED'
-            })
-        }
+            # Invoke self asynchronously
+            # This returns immediately so API Gateway doesn't timeout
+            lambda_client.invoke(
+                FunctionName=context.function_name,
+                InvocationType='Event',  # 'Event' = Async
+                Payload=json.dumps({
+                    'is_async_scan': True,
+                    'body_payload': body,
+                    'connection_id': connection_id,
+                    'requestContext': request_context # Pass context if needed
+                })
+            )
+            
+            # Return success immediately to the client
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Scan request accepted. Processing in background.',
+                    'status': 'ACCEPTED'
+                })
+            }
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Invalid action. Supported actions: start_scan, reconnect'})
+            }
         
     except Exception as e:
         error_message = f"Error in dispatcher: {str(e)}"
