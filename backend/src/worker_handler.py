@@ -14,6 +14,7 @@ from pypdf import PdfReader
 from decimal import Decimal  # <--- QUAN TRỌNG: Import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import threading
 
 # AWS clients
 s3_client = boto3.client('s3')
@@ -30,6 +31,8 @@ GOOGLE_DRIVE_SECRET_ARN = os.environ.get('GOOGLE_DRIVE_SECRET_ARN', '')
 _secrets_cache = {}
 # Cache for Google Drive service to reuse across invocations
 _drive_service_cache = None
+# Lock for thread-safe cache access
+_cache_lock = threading.Lock()
 
 # --- CLASS XỬ LÝ LỖI DECIMAL (FIX LỖI JSON SERIALIZABLE) ---
 class DecimalEncoder(json.JSONEncoder):
@@ -105,33 +108,35 @@ class WebSocketManager:
 
 def get_google_drive_service(credentials: Dict[str, str]):
     """
-    Create Google Drive API service client with caching.
+    Create Google Drive API service client with thread-safe caching.
     """
     global _drive_service_cache
     
-    # Return cached service if available
-    if _drive_service_cache is not None:
-        return _drive_service_cache
-    
-    if not credentials.get('access_token'):
-        return None
-    
-    try:
-        creds = Credentials(
-            token=credentials['access_token'],
-            refresh_token=credentials.get('refresh_token'),
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=credentials.get('client_id'),
-            client_secret=credentials.get('client_secret')
-        )
+    # Thread-safe cache check and update
+    with _cache_lock:
+        # Return cached service if available
+        if _drive_service_cache is not None:
+            return _drive_service_cache
         
-        service = build('drive', 'v3', credentials=creds)
-        # Cache the service for reuse
-        _drive_service_cache = service
-        return service
-    except Exception as e:
-        print(f"Error creating Google Drive service: {str(e)}")
-        return None
+        if not credentials.get('access_token'):
+            return None
+        
+        try:
+            creds = Credentials(
+                token=credentials['access_token'],
+                refresh_token=credentials.get('refresh_token'),
+                token_uri='https://oauth2.googleapis.com/token',
+                client_id=credentials.get('client_id'),
+                client_secret=credentials.get('client_secret')
+            )
+            
+            service = build('drive', 'v3', credentials=creds)
+            # Cache the service for reuse
+            _drive_service_cache = service
+            return service
+        except Exception as e:
+            print(f"Error creating Google Drive service: {str(e)}")
+            return None
 
 
 def download_file_from_drive(service, file_id: str) -> bytes:
