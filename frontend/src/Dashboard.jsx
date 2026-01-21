@@ -33,8 +33,8 @@ const Dashboard = () => {
       reconnectAttempts: 10,
       reconnectInterval: 3000,
       heartbeat: {
-        message: JSON.stringify({ action: 'ping' }),
-        returnMessage: 'pong',
+        message: JSON.stringify({ action: "ping" }),
+        returnMessage: "pong",
         timeout: 60000,
         interval: 25000,
       },
@@ -62,33 +62,33 @@ const Dashboard = () => {
   // Load session from localStorage on mount and reconnect if needed
   useEffect(() => {
     const loadSavedSession = () => {
-      const savedSession = localStorage.getItem('processing_session');
+      const savedSession = localStorage.getItem("processing_session");
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
-          console.log('Found saved session:', session);
-          
+          console.log("Found saved session:", session);
+
           // Restore form state
           if (session.drive_link) {
             setGoogleDriveLink(session.drive_link);
           }
-          
+
           if (session.session_id) {
             setCurrentSessionId(session.session_id);
-            
+
             // Wait for WebSocket to be ready, then reconnect
             if (readyState === ReadyState.OPEN) {
-              console.log('WebSocket ready, sending reconnect...');
+              console.log("WebSocket ready, sending reconnect...");
               sendReconnectRequest(session.session_id);
             }
           }
         } catch (error) {
-          console.error('Error loading saved session:', error);
-          localStorage.removeItem('processing_session');
+          console.error("Error loading saved session:", error);
+          localStorage.removeItem("processing_session");
         }
       }
     };
-    
+
     // Only load on mount
     loadSavedSession();
   }, []); // Empty dependency array = run once on mount
@@ -96,16 +96,19 @@ const Dashboard = () => {
   // Send reconnect when WebSocket becomes ready (if we have a saved session)
   useEffect(() => {
     if (readyState === ReadyState.OPEN && currentSessionId && !isProcessing) {
-      const savedSession = localStorage.getItem('processing_session');
+      const savedSession = localStorage.getItem("processing_session");
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
           if (session.session_id === currentSessionId) {
-            console.log('WebSocket connected, sending reconnect for session:', currentSessionId);
+            console.log(
+              "WebSocket connected, sending reconnect for session:",
+              currentSessionId,
+            );
             sendReconnectRequest(currentSessionId);
           }
         } catch (error) {
-          console.error('Error processing reconnect:', error);
+          console.error("Error processing reconnect:", error);
         }
       }
     }
@@ -116,14 +119,14 @@ const Dashboard = () => {
       action: "reconnect",
       session_id: sessionId,
     };
-    console.log('Sending reconnect message:', message);
+    console.log("Sending reconnect message:", message);
     sendMessage(JSON.stringify(message));
     setStatusMessage("Reconnecting to session...");
   };
 
   // Clear session from localStorage
   const clearSession = () => {
-    localStorage.removeItem('processing_session');
+    localStorage.removeItem("processing_session");
     setCurrentSessionId("");
     setIsProcessing(false);
     setProgress(0);
@@ -133,7 +136,7 @@ const Dashboard = () => {
     setDownloadUrl("");
     setLiveScanLog([]);
     setStatusMessage("Session cleared");
-    console.log('Session cleared from localStorage');
+    console.log("Session cleared from localStorage");
   };
 
   // Handle incoming WebSocket messages
@@ -152,23 +155,26 @@ const Dashboard = () => {
             setDownloadUrl("");
             setLiveScanLog([]);
             setValidationError("");
-            
+
             // Set total files from STARTED event
             if (data.total_files) {
               setTotalFiles(data.total_files);
               setProcessedFiles(0);
             }
-            
+
             // Save session to localStorage
             if (data.session_id) {
               setCurrentSessionId(data.session_id);
               const session = {
                 session_id: data.session_id,
                 drive_link: googleDriveLink,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
               };
-              localStorage.setItem('processing_session', JSON.stringify(session));
-              console.log('Session saved to localStorage:', session);
+              localStorage.setItem(
+                "processing_session",
+                JSON.stringify(session),
+              );
+              console.log("Session saved to localStorage:", session);
             }
             break;
 
@@ -176,19 +182,19 @@ const Dashboard = () => {
             // Restore UI state from server
             console.log("Restoring state from server:", data);
             setStatusMessage(data.message || "State synchronized");
-            
+
             if (data.total_files) {
               setTotalFiles(data.total_files);
             }
-            
+
             if (data.processed_count !== undefined) {
               setProcessedFiles(data.processed_count);
             }
-            
+
             if (data.progress !== undefined) {
               setProgress(data.progress);
             }
-            
+
             // Restore results
             if (data.results && Array.isArray(data.results)) {
               const formattedResults = data.results.map((item) => ({
@@ -200,13 +206,15 @@ const Dashboard = () => {
               }));
               setResults(formattedResults);
             }
-            
+
             // Check if processing is still in progress
-            const status = data.status || 'IN_PROGRESS';
-            if (status === 'IN_PROGRESS') {
+            const status = data.status || "IN_PROGRESS";
+            if (status === "IN_PROGRESS") {
               setIsProcessing(true);
-              setStatusMessage(`Reconnected: Processing ${data.processed_count}/${data.total_files} files`);
-            } else if (status === 'COMPLETE') {
+              setStatusMessage(
+                `Reconnected: Processing ${data.processed_count}/${data.total_files} files`,
+              );
+            } else if (status === "COMPLETE") {
               setIsProcessing(false);
               setProgress(100);
               setStatusMessage("Processing completed!");
@@ -216,28 +224,28 @@ const Dashboard = () => {
           case "PROGRESS":
             // Update progress ensuring it never goes backward
             const newProgress = data.value || 0;
-            setProgress(prevProgress => Math.max(prevProgress, newProgress));
-            
+            setProgress((prevProgress) => Math.max(prevProgress, newProgress));
+
             const newProcessed = data.processed || 0;
             const newTotal = data.total || 0;
-            
-            setProcessedFiles(prevProcessed => Math.max(prevProcessed, newProcessed));
-            setTotalFiles(prevTotal => Math.max(prevTotal, newTotal));
-            
-            setStatusMessage(
-              `Processing: ${newProcessed}/${newTotal} files`,
+
+            setProcessedFiles((prevProcessed) =>
+              Math.max(prevProcessed, newProcessed),
             );
-            
+            setTotalFiles((prevTotal) => Math.max(prevTotal, newTotal));
+
+            setStatusMessage(`Processing: ${newProcessed}/${newTotal} files`);
+
             // Add to live scan log (show last file being processed)
             if (data.file_name) {
-              setLiveScanLog(prevLog => [
-                { 
-                  id: crypto.randomUUID(), 
-                  fileName: data.file_name, 
+              setLiveScanLog((prevLog) => [
+                {
+                  id: crypto.randomUUID(),
+                  fileName: data.file_name,
                   timestamp: new Date().toLocaleTimeString(),
-                  status: 'processing'
+                  status: "processing",
                 },
-                ...prevLog.slice(0, 49) // Keep last 50 entries
+                ...prevLog.slice(0, 49), // Keep last 50 entries
               ]);
             }
             break;
@@ -255,17 +263,17 @@ const Dashboard = () => {
                 pdfLink: matchData.pdf_link || "",
               },
             ]);
-            
+
             // Add to live scan log
-            setLiveScanLog(prevLog => [
-              { 
-                id: crypto.randomUUID(), 
-                fileName: matchData.file_name || "Unknown", 
+            setLiveScanLog((prevLog) => [
+              {
+                id: crypto.randomUUID(),
+                fileName: matchData.file_name || "Unknown",
                 timestamp: new Date().toLocaleTimeString(),
-                status: 'match_found',
-                holeCode: matchData.hole_code
+                status: "match_found",
+                holeCode: matchData.hole_code,
               },
-              ...prevLog.slice(0, 49) // Keep last 50 entries
+              ...prevLog.slice(0, 49), // Keep last 50 entries
             ]);
             break;
 
@@ -273,10 +281,13 @@ const Dashboard = () => {
             setProgress(100);
             setIsProcessing(false);
             setDownloadUrl(data.download_url || "");
-            setStatusMessage(data.message || "Processing completed successfully!");
-            
+            setStatusMessage(
+              data.message || "Processing completed successfully!",
+            );
+
             // Clear session from localStorage when complete
-            clearSession();
+            localStorage.removeItem("processing_session");
+            setCurrentSessionId("");
             break;
 
           case "ERROR":
@@ -298,17 +309,17 @@ const Dashboard = () => {
     const file = event.target.files?.[0];
     if (file) {
       setExcelFile(file);
-      
+
       try {
         // Parse Excel file to extract target hole codes
         const arrayBuffer = await file.arrayBuffer();
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(arrayBuffer);
-        
+
         // Assume first worksheet contains hole codes in the first column
         const worksheet = workbook.worksheets[0];
         const holeCodes = [];
-        
+
         worksheet.eachRow((row, rowNumber) => {
           // Skip header row
           if (rowNumber > 1) {
@@ -322,12 +333,14 @@ const Dashboard = () => {
             }
           }
         });
-        
+
         setTargetHoleCodes(holeCodes);
         console.log(`Extracted ${holeCodes.length} hole codes from Excel file`);
       } catch (error) {
         console.error("Error parsing Excel file:", error);
-        alert("Failed to parse Excel file. Please ensure it's a valid Excel file with hole codes in the first column.");
+        alert(
+          "Failed to parse Excel file. Please ensure it's a valid Excel file with hole codes in the first column.",
+        );
       }
     }
   };
@@ -336,7 +349,7 @@ const Dashboard = () => {
   const handleStartProcessing = () => {
     // Clear previous validation error
     setValidationError("");
-    
+
     if (!websocketUrl) {
       setValidationError(
         "WebSocket URL is not configured. Please set VITE_WEBSOCKET_URL in your .env file.",
@@ -349,14 +362,19 @@ const Dashboard = () => {
       setValidationError("Please enter a Google Drive Link");
       return;
     }
-    
+
     // Validate that the URL is actually a Google Drive URL
     try {
       const url = new URL(googleDriveLink);
       // Only allow exact match or subdomains of drive.google.com
       const hostname = url.hostname.toLowerCase();
-      if (hostname !== 'drive.google.com' && !hostname.endsWith('.drive.google.com')) {
-        setValidationError("Please enter a valid Google Drive URL (must be from drive.google.com)");
+      if (
+        hostname !== "drive.google.com" &&
+        !hostname.endsWith(".drive.google.com")
+      ) {
+        setValidationError(
+          "Please enter a valid Google Drive URL (must be from drive.google.com)",
+        );
         return;
       }
     } catch (e) {
@@ -583,7 +601,8 @@ const Dashboard = () => {
         {(isProcessing || liveScanLog.length > 0) && (
           <div className="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 className="text-xl font-semibold text-gray-800 mb-4">
-              Live Scan Log {liveScanLog.length > 0 && `(${liveScanLog.length} entries)`}
+              Live Scan Log{" "}
+              {liveScanLog.length > 0 && `(${liveScanLog.length} entries)`}
             </h2>
             <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-md">
               {liveScanLog.length === 0 ? (
@@ -596,9 +615,9 @@ const Dashboard = () => {
                     <div
                       key={entry.id}
                       className={`px-4 py-2 hover:bg-gray-50 text-sm ${
-                        entry.status === 'match_found' 
-                          ? 'bg-green-50 border-l-4 border-green-500' 
-                          : ''
+                        entry.status === "match_found"
+                          ? "bg-green-50 border-l-4 border-green-500"
+                          : ""
                       }`}
                     >
                       <div className="flex items-start justify-between">
@@ -613,7 +632,7 @@ const Dashboard = () => {
                           )}
                         </div>
                         <div className="flex items-center ml-4 space-x-2">
-                          {entry.status === 'match_found' && (
+                          {entry.status === "match_found" && (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                               Match
                             </span>
@@ -629,7 +648,8 @@ const Dashboard = () => {
               )}
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              Showing real-time file processing activity. Latest entries appear at the top.
+              Showing real-time file processing activity. Latest entries appear
+              at the top.
             </p>
           </div>
         )}
@@ -658,8 +678,8 @@ const Dashboard = () => {
                   Processing Complete!
                 </h3>
                 <p className="mt-1 text-sm text-green-700">
-                  Successfully processed {totalFiles} files and found {results.length} matches.
-                  Your report is ready for download.
+                  Successfully processed {totalFiles} files and found{" "}
+                  {results.length} matches. Your report is ready for download.
                 </p>
               </div>
               <div className="ml-4">

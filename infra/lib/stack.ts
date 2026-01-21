@@ -121,7 +121,6 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       memorySize: 1024,
       // Reserve concurrency for faster processing of large batches (6600 files)
       // This allows up to 100 workers to run in parallel
-      reservedConcurrentExecutions: 100,
       environment: {
         TABLE_NAME: processResultsTable.tableName,
         RESULTS_BUCKET: resultsBucket.bucketName,
