@@ -92,6 +92,7 @@ validate_environment_variables()
 def extract_folder_id_from_url(drive_link: str) -> str:
     """
     Extract folder ID from Google Drive URL.
+    Validates that the extracted ID matches expected Google Drive ID format.
     """
     patterns = [
         r'folders/([a-zA-Z0-9_-]+)',
@@ -101,9 +102,19 @@ def extract_folder_id_from_url(drive_link: str) -> str:
     for pattern in patterns:
         match = re.search(pattern, drive_link)
         if match:
-            return match.group(1)
+            folder_id = match.group(1)
+            # Validate folder ID format (alphanumeric, underscore, hyphen only)
+            if re.match(r'^[a-zA-Z0-9_-]+$', folder_id):
+                return folder_id
     
-    return drive_link.strip()
+    # If no pattern matched, return the stripped input but validate it
+    folder_id = drive_link.strip()
+    if re.match(r'^[a-zA-Z0-9_-]+$', folder_id):
+        return folder_id
+    
+    # If validation fails, return empty string
+    print(f"Warning: Invalid folder ID format: {drive_link}")
+    return ""
 
 
 def get_google_drive_service(credentials: Dict[str, str]):
@@ -143,6 +154,7 @@ def fetch_files_from_google_drive_recursive(service, root_folder_id: str) -> Lis
     
     try:
         files_list = []
+        folders_scanned = 0
         # Queue for folders to search, starting with root
         folders_to_search = [root_folder_id]
         
@@ -150,11 +162,17 @@ def fetch_files_from_google_drive_recursive(service, root_folder_id: str) -> Lis
 
         while folders_to_search:
             current_folder_id = folders_to_search.pop(0)
+            folders_scanned += 1
             page_token = None
+            files_in_current_folder = 0
+            subfolders_found = 0
+            
+            print(f"Scanning folder {folders_scanned}: {current_folder_id}")
             
             while True:
                 # Query for both PDFs and sub-folders
-                query = f"'{current_folder_id}' in parents and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.folder') and trashed=false"
+                # Support various PDF MIME types including generic application/octet-stream
+                query = f"'{current_folder_id}' in parents and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.folder' or (name contains '.pdf' and mimeType='application/octet-stream')) and trashed=false"
                 
                 results = service.files().list(
                     q=query,
@@ -164,20 +182,27 @@ def fetch_files_from_google_drive_recursive(service, root_folder_id: str) -> Lis
                 ).execute()
                 
                 items = results.get('files', [])
+                print(f"  Found {len(items)} items in current page (folder: {current_folder_id})")
                 
                 for item in items:
                     if item.get('mimeType') == 'application/vnd.google-apps.folder':
                         # Add sub-folder to queue
                         folders_to_search.append(item['id'])
+                        subfolders_found += 1
+                        print(f"    Found subfolder: {item.get('name', 'Unknown')}")
                     else:
                         # Add PDF file to results
                         files_list.append(item)
+                        files_in_current_folder += 1
+                        print(f"    Found PDF: {item.get('name', 'Unknown')} (mime: {item.get('mimeType')})")
                 
                 page_token = results.get('nextPageToken')
                 if not page_token:
                     break
+            
+            print(f"  Folder scan complete: {files_in_current_folder} PDFs, {subfolders_found} subfolders")
         
-        print(f"Found total {len(files_list)} PDF files in Google Drive folder structure")
+        print(f"Scan completed: {folders_scanned} folders scanned, found {len(files_list)} PDF files total")
         return files_list
         
     except Exception as e:
@@ -283,15 +308,38 @@ def perform_scan_logic(event):
                     files_list = fetch_files_from_google_drive_recursive(service, folder_id)
                     
                     if not files_list:
-                        print("No files found in Google Drive folder structure")
-                        # Optional: fall back to simulation if strictly required, 
-                        # or just return 0 files. Here we flag for simulation if desired.
-                        # use_simulation = True 
+                        error_msg = (
+                            f"No PDF files found in Google Drive folder (ID: {folder_id}). "
+                            "Please check: (1) Folder contains PDF files, "
+                            "(2) Files are not in trash, "
+                            "(3) Service account has proper permissions. "
+                            f"Drive link provided: {google_drive_link}"
+                        )
+                        print(error_msg)
+                        
+                        # Send error notification to client
+                        ws_manager.send_update({
+                            'type': 'ERROR',
+                            'message': error_msg
+                        })
+                        return
                 else:
                     print("Could not create Google Drive service, falling back to simulation")
                     use_simulation = True
             except Exception as e:
-                print(f"Error accessing Google Drive: {str(e)}")
+                error_msg = f"Error accessing Google Drive: {str(e)}"
+                print(error_msg)
+                traceback.print_exc()
+                
+                # Send error notification to client
+                try:
+                    ws_manager.send_update({
+                        'type': 'ERROR',
+                        'message': error_msg
+                    })
+                except Exception as ws_error:
+                    print(f"Failed to send error to WebSocket: {str(ws_error)}")
+                    
                 print("Falling back to simulation mode")
                 use_simulation = True
         else:
@@ -330,6 +378,7 @@ def perform_scan_logic(event):
         
         # 3. Batch send file metadata to SQS
         batch_size = 10
+        total_sent = 0
         for batch_start_idx in range(0, len(files_list), batch_size):
             batch = files_list[batch_start_idx:batch_start_idx + batch_size]
             entries = []
@@ -353,12 +402,28 @@ def perform_scan_logic(event):
             
             # Send batch to SQS
             if entries:
-                sqs_client.send_message_batch(
-                    QueueUrl=QUEUE_URL,
-                    Entries=entries
-                )
+                try:
+                    response = sqs_client.send_message_batch(
+                        QueueUrl=QUEUE_URL,
+                        Entries=entries
+                    )
+                    total_sent += len(entries)
+                    
+                    # Log any failures
+                    if response.get('Failed'):
+                        print(f"Warning: {len(response['Failed'])} messages failed to send in batch")
+                        for failed in response['Failed']:
+                            print(f"  Failed message {failed['Id']}: {failed['Message']}")
+                    
+                    # Print progress every 100 files
+                    if total_sent > 0 and (total_sent % 100 == 0 or total_sent == len(files_list)):
+                        print(f"Sent {total_sent}/{len(files_list)} files to SQS queue")
+                        
+                except Exception as e:
+                    print(f"Error sending batch to SQS: {str(e)}")
+                    traceback.print_exc()
         
-        print(f"Dispatched {total_files} files to SQS for session {session_id}")
+        print(f"Dispatched {total_sent} files to SQS for session {session_id}")
         
         # 4. Notify Client via WebSocket
         ws_manager.send_update({
@@ -368,6 +433,8 @@ def perform_scan_logic(event):
             'total_files': total_files,
             'timestamp': datetime.now().isoformat()
         })
+        
+        print(f"Successfully started processing session {session_id} with {total_files} files")
         
     except Exception as e:
         error_message = f"Error in async scan logic: {str(e)}"
