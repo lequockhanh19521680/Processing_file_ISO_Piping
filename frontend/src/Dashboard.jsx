@@ -23,6 +23,7 @@ const Dashboard = () => {
   const [statusMessage, setStatusMessage] = useState("");
   const [liveScanLog, setLiveScanLog] = useState([]);
   const [validationError, setValidationError] = useState("");
+  const [currentSessionId, setCurrentSessionId] = useState("");
 
   // WebSocket connection
   const { sendMessage, lastMessage, readyState } = useWebSocket(
@@ -58,6 +59,83 @@ const Dashboard = () => {
     [ReadyState.UNINSTANTIATED]: "bg-gray-500",
   }[readyState];
 
+  // Load session from localStorage on mount and reconnect if needed
+  useEffect(() => {
+    const loadSavedSession = () => {
+      const savedSession = localStorage.getItem('processing_session');
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          console.log('Found saved session:', session);
+          
+          // Restore form state
+          if (session.drive_link) {
+            setGoogleDriveLink(session.drive_link);
+          }
+          
+          if (session.session_id) {
+            setCurrentSessionId(session.session_id);
+            
+            // Wait for WebSocket to be ready, then reconnect
+            if (readyState === ReadyState.OPEN) {
+              console.log('WebSocket ready, sending reconnect...');
+              sendReconnectRequest(session.session_id);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading saved session:', error);
+          localStorage.removeItem('processing_session');
+        }
+      }
+    };
+    
+    // Only load on mount
+    loadSavedSession();
+  }, []); // Empty dependency array = run once on mount
+
+  // Send reconnect when WebSocket becomes ready (if we have a saved session)
+  useEffect(() => {
+    if (readyState === ReadyState.OPEN && currentSessionId && !isProcessing) {
+      const savedSession = localStorage.getItem('processing_session');
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          if (session.session_id === currentSessionId) {
+            console.log('WebSocket connected, sending reconnect for session:', currentSessionId);
+            sendReconnectRequest(currentSessionId);
+          }
+        } catch (error) {
+          console.error('Error processing reconnect:', error);
+        }
+      }
+    }
+  }, [readyState, currentSessionId, isProcessing]);
+
+  const sendReconnectRequest = (sessionId) => {
+    const message = {
+      action: "reconnect",
+      session_id: sessionId,
+    };
+    console.log('Sending reconnect message:', message);
+    sendMessage(JSON.stringify(message));
+    setStatusMessage("Reconnecting to session...");
+  };
+
+  // Clear session from localStorage
+  const clearSession = () => {
+    localStorage.removeItem('processing_session');
+    setCurrentSessionId("");
+    setIsProcessing(false);
+    setProgress(0);
+    setProcessedFiles(0);
+    setTotalFiles(0);
+    setResults([]);
+    setDownloadUrl("");
+    setLiveScanLog([]);
+    setStatusMessage("Session cleared");
+    console.log('Session cleared from localStorage');
+  };
+
   // Handle incoming WebSocket messages
   useEffect(() => {
     if (lastMessage !== null) {
@@ -74,10 +152,64 @@ const Dashboard = () => {
             setDownloadUrl("");
             setLiveScanLog([]);
             setValidationError("");
+            
             // Set total files from STARTED event
             if (data.total_files) {
               setTotalFiles(data.total_files);
               setProcessedFiles(0);
+            }
+            
+            // Save session to localStorage
+            if (data.session_id) {
+              setCurrentSessionId(data.session_id);
+              const session = {
+                session_id: data.session_id,
+                drive_link: googleDriveLink,
+                timestamp: new Date().toISOString()
+              };
+              localStorage.setItem('processing_session', JSON.stringify(session));
+              console.log('Session saved to localStorage:', session);
+            }
+            break;
+
+          case "SYNC_STATE":
+            // Restore UI state from server
+            console.log("Restoring state from server:", data);
+            setStatusMessage(data.message || "State synchronized");
+            
+            if (data.total_files) {
+              setTotalFiles(data.total_files);
+            }
+            
+            if (data.processed_count !== undefined) {
+              setProcessedFiles(data.processed_count);
+            }
+            
+            if (data.progress !== undefined) {
+              setProgress(data.progress);
+            }
+            
+            // Restore results
+            if (data.results && Array.isArray(data.results)) {
+              const formattedResults = data.results.map((item) => ({
+                id: crypto.randomUUID(),
+                holeCode: item.hole_code || "",
+                fileName: item.file_name || "",
+                status: item.status || "",
+                pdfLink: item.pdf_link || "",
+              }));
+              setResults(formattedResults);
+            }
+            
+            // Check if processing is still in progress
+            const status = data.status || 'IN_PROGRESS';
+            if (status === 'IN_PROGRESS') {
+              setIsProcessing(true);
+              setStatusMessage(`Reconnected: Processing ${data.processed_count}/${data.total_files} files`);
+            } else if (status === 'COMPLETE') {
+              setIsProcessing(false);
+              setProgress(100);
+              setStatusMessage("Processing completed!");
             }
             break;
 
@@ -142,6 +274,9 @@ const Dashboard = () => {
             setIsProcessing(false);
             setDownloadUrl(data.download_url || "");
             setStatusMessage(data.message || "Processing completed successfully!");
+            
+            // Clear session from localStorage when complete
+            clearSession();
             break;
 
           case "ERROR":
@@ -375,6 +510,29 @@ const Dashboard = () => {
                 "Start Scan"
               )}
             </button>
+
+            {currentSessionId && (
+              <button
+                onClick={clearSession}
+                disabled={isProcessing}
+                className="px-6 py-3 bg-gray-600 text-white font-medium rounded-md hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center"
+              >
+                <svg
+                  className="w-5 h-5 mr-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+                Clear Session
+              </button>
+            )}
 
             {downloadUrl && (
               <a
