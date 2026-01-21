@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from googleapiclient.http import MediaIoBaseDownload
 from pypdf import PdfReader
+from decimal import Decimal  # <--- QUAN TRỌNG: Import Decimal
 
 # AWS clients
 s3_client = boto3.client('s3')
@@ -26,13 +27,18 @@ GOOGLE_DRIVE_SECRET_ARN = os.environ.get('GOOGLE_DRIVE_SECRET_ARN', '')
 # Cache for secrets to avoid repeated API calls
 _secrets_cache = {}
 
+# --- CLASS XỬ LÝ LỖI DECIMAL (FIX LỖI JSON SERIALIZABLE) ---
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            # Nếu là số nguyên (ví dụ 5.0) thì trả về int, ngược lại float
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super(DecimalEncoder, self).default(obj)
+# -----------------------------------------------------------
 
 def get_google_drive_credentials() -> Dict[str, str]:
     """
     Retrieve Google Drive API credentials from AWS Secrets Manager.
-    
-    Returns:
-        Dictionary containing 'access_token' and 'refresh_token'
     """
     global _secrets_cache
     
@@ -68,7 +74,6 @@ class WebSocketManager:
     """Manage WebSocket connections and send updates to clients"""
     
     def __init__(self, endpoint_url: str, connection_id: str):
-        # Extract the API Gateway endpoint from WebSocket URL
         if endpoint_url.startswith('wss://'):
             endpoint_url = endpoint_url.replace('wss://', 'https://')
         
@@ -78,9 +83,10 @@ class WebSocketManager:
     def send_update(self, data: Dict[str, Any]) -> bool:
         """Send update to the connected client via WebSocket"""
         try:
+            # SỬA DÒNG NÀY: Dùng cls=DecimalEncoder để xử lý số từ DynamoDB
             self.client.post_to_connection(
                 ConnectionId=self.connection_id,
-                Data=json.dumps(data).encode('utf-8')
+                Data=json.dumps(data, cls=DecimalEncoder).encode('utf-8')
             )
             print(f"Sent update to connection {self.connection_id}: {data.get('type', 'UNKNOWN')}")
             return True
@@ -93,12 +99,6 @@ class WebSocketManager:
             return False
 
 
-def extract_hole_codes_from_text(text: str) -> List[str]:
-    """Extract hole codes from text"""
-    hole_codes = re.findall(r'\b(?:HOLE|HC)-\d+\b', text, re.IGNORECASE)
-    return hole_codes
-
-
 def get_google_drive_service(credentials: Dict[str, str]):
     """
     Create Google Drive API service client.
@@ -107,7 +107,6 @@ def get_google_drive_service(credentials: Dict[str, str]):
         return None
     
     try:
-        # Create credentials object
         creds = Credentials(
             token=credentials['access_token'],
             refresh_token=credentials.get('refresh_token'),
@@ -116,7 +115,6 @@ def get_google_drive_service(credentials: Dict[str, str]):
             client_secret=credentials.get('client_secret')
         )
         
-        # Build the Drive API service
         service = build('drive', 'v3', credentials=creds)
         return service
     except Exception as e:
@@ -151,11 +149,6 @@ def download_file_from_drive(service, file_id: str) -> bytes:
 def extract_text_with_pypdf(pdf_bytes: bytes) -> str:
     """
     Extract text from PDF using pypdf library.
-    Works with native PDFs that have searchable text.
-    
-    Note: This method only works with native PDFs containing searchable text.
-    It will NOT work with scanned PDFs or image-based PDFs. For those cases,
-    OCR-based solutions like AWS Textract or Tesseract would be required.
     """
     try:
         pdf_buffer = io.BytesIO(pdf_bytes)
@@ -175,49 +168,59 @@ def extract_text_with_pypdf(pdf_bytes: bytes) -> str:
 
 
 def process_single_file(file_id: str, file_name: str, target_hole_codes: List[str], use_simulation: bool = False) -> Dict[str, Any]:
-    """Process a single file and check for hole code matches"""
+    """
+    Process a single file and check for EXACT WORD MATCHES.
+    Example: Target "BC" will match "BC" or "Code-BC" but NOT "BCA".
+    """
+    
+    found_matches = []
     
     if use_simulation:
-        # Simulation mode - generate mock content
-        file_content = f'Sample content for {file_name} with HOLE-{hash(file_name) % 10}'
-        found_hole_codes = extract_hole_codes_from_text(file_content)
+        # Simulation logic placeholder
+        pass
     else:
-        # Real processing mode
         try:
             # Get Google Drive credentials
             credentials = get_google_drive_credentials()
             service = get_google_drive_service(credentials)
             
             if not service:
-                print(f"No Google Drive service available for {file_name}, using simulation")
-                file_content = f'Sample content for {file_name}'
-                found_hole_codes = extract_hole_codes_from_text(file_content)
+                print(f"No Google Drive service available for {file_name}")
             else:
                 # Download file from Google Drive
                 pdf_bytes = download_file_from_drive(service, file_id)
                 
                 if not pdf_bytes:
-                    print(f"Could not download {file_name}, skipping")
-                    found_hole_codes = []
+                    print(f"Could not download {file_name}")
                 else:
                     # Extract text using pypdf
                     text_content = extract_text_with_pypdf(pdf_bytes)
-                    print(f"Extracted text with pypdf from {file_name}")
                     
-                    # Extract hole codes from text
-                    found_hole_codes = extract_hole_codes_from_text(text_content)
+                    # --- DEBUG LOG: In ra 100 ký tự đầu để kiểm tra ---
+                    print(f"[DEBUG TEXT] {file_name}: {text_content[:100]}...")
+                    # --------------------------------------------------
+                    
+                    for code in target_hole_codes:
+                        code_str = str(code).strip()
+                        if not code_str:
+                            continue
+                            
+                        # LOGIC QUAN TRỌNG: Dùng \b (Word Boundary) để bắt chính xác từ
+                        # \b : Ranh giới từ (khoảng trắng, dấu chấm, phẩy, gạch ngang...)
+                        pattern = r'\b' + re.escape(code_str) + r'\b'
+                        
+                        if re.search(pattern, text_content, re.IGNORECASE):
+                            found_matches.append(code_str)
+                            print(f"Found EXACT match: '{code_str}' in {file_name}")
+
         except Exception as e:
             print(f"Error processing {file_name}: {str(e)}")
             traceback.print_exc()
-            found_hole_codes = []
-    
-    # Check for matches with target hole codes
-    matches = [code for code in found_hole_codes if code in target_hole_codes]
     
     result = {
         'file_name': file_name,
-        'found_codes': matches,
-        'status': f"{len(matches)} Code{'s' if len(matches) != 1 else ''}" if matches else "No Match"
+        'found_codes': found_matches,
+        'status': f"{len(found_matches)} Match{'es' if len(found_matches) != 1 else ''}" if found_matches else "No Match"
     }
     
     return result
@@ -306,16 +309,17 @@ def handler(event, context):
             result = process_single_file(file_id, file_name, target_hole_codes, use_simulation)
             
             # Write result to DynamoDB
-            table.put_item(
-                Item={
-                    'session_id': session_id,
-                    'file_name': file_name,
-                    'status': result['status'],
-                    'found_codes': result['found_codes'],
-                    'pdf_link': pdf_link,
-                    'timestamp': datetime.now().isoformat()
-                }
-            )
+            if result['found_codes']:
+                    table.put_item(
+                        Item={
+                            'session_id': session_id,
+                            'file_name': file_name,
+                            'status': result['status'],
+                            'found_codes': result['found_codes'],
+                            'pdf_link': pdf_link,
+                            'timestamp': datetime.now().isoformat()
+                        }
+                    )
             
             # Atomically increment processed_count in meta item
             response = table.update_item(
@@ -327,6 +331,8 @@ def handler(event, context):
             
             meta = response['Attributes']
             connection_id = meta.get('connection_id')
+            
+            # Ép kiểu int để tính toán an toàn
             total_files = int(meta.get('total_files', 0)) 
             processed_count = int(meta.get('processed_count', 0))
             
