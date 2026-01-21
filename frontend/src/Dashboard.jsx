@@ -61,7 +61,7 @@ const Dashboard = () => {
 
   // Load session from localStorage on mount and reconnect if needed
   useEffect(() => {
-    const loadSavedSession = async () => {
+    const loadSavedSession = () => {
       const savedSession = localStorage.getItem('processing_session');
       if (savedSession) {
         try {
@@ -109,7 +109,7 @@ const Dashboard = () => {
         }
       }
     }
-  }, [readyState, currentSessionId]);
+  }, [readyState, currentSessionId, isProcessing]);
 
   const sendReconnectRequest = (sessionId) => {
     const message = {
@@ -191,8 +191,8 @@ const Dashboard = () => {
             
             // Restore results
             if (data.results && Array.isArray(data.results)) {
-              const formattedResults = data.results.map((item, index) => ({
-                id: Date.now() + index,
+              const formattedResults = data.results.map((item) => ({
+                id: crypto.randomUUID(),
                 holeCode: item.hole_code || "",
                 fileName: item.file_name || "",
                 status: item.status || "",

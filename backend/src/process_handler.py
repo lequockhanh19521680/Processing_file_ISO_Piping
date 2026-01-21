@@ -8,6 +8,7 @@ from typing import Dict, List, Any
 import traceback
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.http import MediaIoBaseDownload
 import io
 
@@ -171,7 +172,6 @@ def get_google_drive_service(credentials: Dict[str, str], ws_manager=None):
         if creds.expired and creds.refresh_token:
             try:
                 print("Access token is expired. Attempting to refresh...")
-                from google.auth.transport.requests import Request
                 creds.refresh(Request())
                 
                 print("Successfully refreshed access token")
@@ -527,6 +527,7 @@ def handle_reconnect_action(session_id: str, connection_id: str):
     """
     Handle reconnect action: fetch session state from DynamoDB and send back to client.
     """
+    ws_manager = None
     try:
         print(f"Handling reconnect for session {session_id}, connection {connection_id}")
         
@@ -569,7 +570,13 @@ def handle_reconnect_action(session_id: str, connection_id: str):
         # Calculate current progress
         total_files = int(session_meta.get('total_files', 0))
         processed_count = int(session_meta.get('processed_count', 0))
-        progress = int((processed_count / total_files * 100)) if total_files > 0 else 0
+        
+        # Handle edge case: if total_files is 0 but processed_count is not
+        if total_files == 0 and processed_count > 0:
+            print(f"Warning: Inconsistent state - total_files is 0 but processed_count is {processed_count}")
+            progress = 0
+        else:
+            progress = int((processed_count / total_files * 100)) if total_files > 0 else 0
         
         # Prepare results data
         results_data = []
@@ -606,14 +613,14 @@ def handle_reconnect_action(session_id: str, connection_id: str):
         traceback.print_exc()
         
         # Try to send error to client
-        try:
-            if 'ws_manager' in locals():
+        if ws_manager:
+            try:
                 ws_manager.send_update({
                     'type': 'ERROR',
                     'message': error_message
                 })
-        except:
-            pass
+            except:
+                pass
 
 
 def handler(event, context):
