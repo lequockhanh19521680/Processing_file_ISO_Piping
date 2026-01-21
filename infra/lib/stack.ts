@@ -77,7 +77,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
 
     // SQS Queue for file processing
     const processingQueue = new sqs.Queue(this, "ProcessingQueue", {
-      visibilityTimeout: cdk.Duration.seconds(180), // 6x Lambda timeout for retries
+      visibilityTimeout: cdk.Duration.seconds(900), // 6x Lambda timeout for retries
       retentionPeriod: cdk.Duration.days(1),
     });
 
@@ -117,7 +117,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: "worker_handler.handler",
       code: lambda.Code.fromAsset("../backend/src"),
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(600),
       memorySize: 1024,
       // Reserve concurrency for faster processing of large batches (6600 files)
       // This allows up to 100 workers to run in parallel
@@ -141,7 +141,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
     scanWorker.addEventSource(
       new lambdaEventSources.SqsEventSource(processingQueue, {
         batchSize: 10,
-        maxBatchingWindow: cdk.Duration.seconds(0), // Process immediately
+        maxConcurrency: 5,
       }),
     );
 
