@@ -119,9 +119,7 @@ export class ProcessingFileISOPipingStack extends cdk.Stack {
       code: lambda.Code.fromAsset("../backend/src"),
       timeout: cdk.Duration.seconds(600),
       memorySize: 3008, // Increased from 1024 to 3008 for better CPU performance
-      // Reserve concurrency for faster processing of large batches (6600 files)
-      // This allows up to 100 workers to run in parallel
-      reservedConcurrentExecutions: 100, // Enable parallel processing
+
       environment: {
         TABLE_NAME: processResultsTable.tableName,
         RESULTS_BUCKET: resultsBucket.bucketName,
@@ -176,12 +174,12 @@ def handler(event, context):
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: "index.handler",
       code: lambda.Code.fromInline(`
-        def handler(event, context):
-            return {
-                'statusCode': 200,
-                'body': 'pong'
-            }
-        `),
+def handler(event, context):
+    return {
+        'statusCode': 200,
+        'body': 'pong'
+      }
+`),
       timeout: cdk.Duration.seconds(30),
     });
 
